@@ -67,8 +67,8 @@ impl MessageSchedule {
 pub trait Repository {
     fn store_schedule(&self, schedule: MessageSchedule) -> Result<(), Box<dyn Error>>;
     fn poll_batch(&self, batch_size: u32) -> Result<Vec<MessageSchedule>, Box<dyn Error>>;
-    fn mark_done(&self, schedule_id: Uuid) -> Result<(), Box<dyn Error>>;
-    fn reschedule(&self, schedule_id: Uuid) -> Result<(), Box<dyn Error>>;
+    fn mark_done(&self, schedule_id: &Uuid) -> Result<(), Box<dyn Error>>;
+    fn reschedule(&self, schedule_id: &Uuid) -> Result<(), Box<dyn Error>>;
 }
 
 #[cfg_attr(test, automock)]
@@ -78,16 +78,11 @@ pub trait Transmitter {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum MetricEvent {
-    Scheduled,
-    ScheduledError,
-    Polled,
-    PolledError,
-    Transmitted,
-    TransmittedError,
-    MarkedDone,
-    MarkedDoneError,
-    Rescheduled,
-    RescheduledError,
+    Scheduled(bool),
+    Polled(bool),
+    Transmitted(bool),
+    MarkedDone(bool),
+    Rescheduled(bool),
 }
 
 #[cfg_attr(test, automock)]
@@ -137,11 +132,11 @@ impl MessageScheduler {
         let schedule = MessageSchedule::new(when, what);
         match self.repository.store_schedule(schedule) {
             Ok(_) => {
-                self.metrics.count(MetricEvent::Scheduled);
+                self.metrics.count(MetricEvent::Scheduled(true));
                 Ok(())
             }
             Err(err) => {
-                self.metrics.count(MetricEvent::ScheduledError);
+                self.metrics.count(MetricEvent::Scheduled(false));
                 Err(err)
             }
         }
@@ -155,11 +150,11 @@ impl MessageScheduler {
     fn process_batch(&self) -> Result<(), Box<dyn Error>> {
         let schedules = match self.repository.poll_batch(BATCH_SIZE) {
             Ok(schedules) => {
-                self.metrics.count(MetricEvent::Polled);
+                self.metrics.count(MetricEvent::Polled(true));
                 schedules
             }
             Err(err) => {
-                self.metrics.count(MetricEvent::PolledError);
+                self.metrics.count(MetricEvent::Polled(false));
                 return Err(err);
             }
         };
@@ -172,11 +167,11 @@ impl MessageScheduler {
             })
             .map(|schedule| match self.transmit(schedule) {
                 Ok(_) => {
-                    self.metrics.count(MetricEvent::Transmitted);
+                    self.metrics.count(MetricEvent::Transmitted(true));
                     Ok(())
                 }
                 Err(err) => {
-                    self.metrics.count(MetricEvent::TransmittedError);
+                    self.metrics.count(MetricEvent::Transmitted(false));
                     Err(err)
                 }
             })
@@ -188,13 +183,13 @@ impl MessageScheduler {
 
     fn transmit(&self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
         match self.transmitter.transmit(schedule.message.clone()) {
-            Ok(_) => match self.repository.mark_done(schedule.id) {
+            Ok(_) => match self.repository.mark_done(&schedule.id) {
                 Ok(_) => {
-                    self.metrics.count(MetricEvent::MarkedDone);
+                    self.metrics.count(MetricEvent::MarkedDone(true));
                     Ok(())
                 }
                 Err(err) => {
-                    self.metrics.count(MetricEvent::MarkedDoneError);
+                    self.metrics.count(MetricEvent::MarkedDone(false));
                     // This requires extra attention, since unrestored non-transmitted
                     // scheduled messages will remain stuck in a DOING state.
                     // It should be logged for manual intervention, retried or
@@ -203,13 +198,13 @@ impl MessageScheduler {
                 }
             },
             Err(transmission_err) => {
-                match self.repository.reschedule(schedule.id) {
+                match self.repository.reschedule(&schedule.id) {
                     Ok(_) => {
-                        self.metrics.count(MetricEvent::Rescheduled);
+                        self.metrics.count(MetricEvent::Rescheduled(true));
                         Err(transmission_err)
                     }
                     Err(err) => {
-                        self.metrics.count(MetricEvent::RescheduledError);
+                        self.metrics.count(MetricEvent::Rescheduled(false));
                         // This requires extra attention, since unrestored non-transmitted
                         // scheduled messages will remain stuck in a DOING state.
                         // It should be logged for manual intervention, retried or
@@ -239,7 +234,7 @@ mod tests {
         let mut metrics = MockMetrics::new();
         metrics
             .expect_count()
-            .with(eq(MetricEvent::Scheduled))
+            .with(eq(MetricEvent::Scheduled(true)))
             .returning(|_| ())
             .times(1);
 
@@ -269,7 +264,7 @@ mod tests {
         let mut metrics = MockMetrics::new();
         metrics
             .expect_count()
-            .with(eq(MetricEvent::ScheduledError))
+            .with(eq(MetricEvent::Scheduled(false)))
             .returning(|_| ())
             .times(1);
 
@@ -294,97 +289,107 @@ mod tests {
         )
     }
 
-    #[test]
-    fn test_transmit_success() {
-        let mut transmitter = MockTransmitter::new();
-        transmitter.expect_transmit().returning(|_| Ok(())).times(1);
+    type StateTransitionFn = dyn Fn(&Uuid) -> Result<(), Box<dyn Error + 'static>> + Send;
 
-        let mut repository = MockRepository::new();
-        repository.expect_mark_done().returning(|_| Ok(())).times(1);
+    enum ScheduleStateTransition {
+        MarkDone(Box<StateTransitionFn>, bool),
+        Reschedule(Box<StateTransitionFn>, bool),
+    }
 
-        let mut metrics = MockMetrics::new();
-        metrics
-            .expect_count()
-            .with(eq(MetricEvent::MarkedDone))
-            .returning(|_| ())
-            .times(1);
-
-        let scheduler = MessageScheduler::new(
-            Box::new(repository),
-            Box::new(transmitter),
-            Box::new(Utc::now),
-            Box::new(metrics),
-        );
-
-        let schedule = new_schedule();
-
-        let result = scheduler.transmit(&schedule);
-        assert!(result.is_ok());
+    struct TransmissionTestCase {
+        name: String,
+        transmission: Box<dyn Fn(Message) -> Result<(), Box<dyn Error + 'static>> + Send>,
+        schedule_state_transition: ScheduleStateTransition,
+        success: bool,
     }
 
     #[test]
-    fn test_transmit_fail_reschedule() {
-        let mut transmitter = MockTransmitter::new();
-        transmitter
-            .expect_transmit()
-            .returning(|_| Err("Failed to transmit".into()))
-            .times(1);
+    fn test_transmission_and_appropriate_state_transition() {
+        let test_cases = vec![
+            TransmissionTestCase {
+                name: "success".into(),
+                transmission: Box::new(move |_| Ok(())),
+                schedule_state_transition: ScheduleStateTransition::MarkDone(
+                    Box::new(move |_| Ok(())),
+                    true,
+                ),
+                success: true,
+            },
+            TransmissionTestCase {
+                name: "fail_and_reschedule".into(),
+                transmission: Box::new(move |_| Err("Let's hope this gets rescheduled.".into())),
+                schedule_state_transition: ScheduleStateTransition::Reschedule(
+                    Box::new(move |_| Ok(())),
+                    true,
+                ),
+                success: false,
+            },
+            TransmissionTestCase {
+                name: "transmit_but_fail_mark_done".into(),
+                transmission: Box::new(move |_| Ok(())),
+                schedule_state_transition: ScheduleStateTransition::MarkDone(
+                    Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
+                    false,
+                ),
+                success: false,
+            },
+            TransmissionTestCase {
+                name: "transmit_fail_and_reschedule_fail".into(),
+                transmission: Box::new(move |_| Err("Even the reschedule hereafter fails".into())),
+                schedule_state_transition: ScheduleStateTransition::Reschedule(
+                    Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
+                    false,
+                ),
+                success: false,
+            },
+        ];
 
-        let mut repository = MockRepository::new();
-        repository
-            .expect_reschedule()
-            .returning(|_| Ok(()))
-            .times(1);
+        for test_case in test_cases {
+            let mut transmitter = MockTransmitter::new();
+            let mut repository = MockRepository::new();
+            let mut metrics = MockMetrics::new();
 
-        let mut metrics = MockMetrics::new();
-        metrics
-            .expect_count()
-            .with(eq(MetricEvent::Rescheduled))
-            .returning(|_| ())
-            .times(1);
+            transmitter
+                .expect_transmit()
+                .returning(test_case.transmission)
+                .times(1);
 
-        let scheduler = MessageScheduler::new(
-            Box::new(repository),
-            Box::new(transmitter),
-            Box::new(Utc::now),
-            Box::new(metrics),
-        );
+            match test_case.schedule_state_transition {
+                ScheduleStateTransition::MarkDone(callback, transition_succeeds) => {
+                    repository.expect_mark_done().returning(callback).times(1);
+                    metrics
+                        .expect_count()
+                        .with(eq(MetricEvent::MarkedDone(transition_succeeds)))
+                        .returning(|_| ())
+                        .times(1);
+                }
+                ScheduleStateTransition::Reschedule(callback, transition_succeeds) => {
+                    repository.expect_reschedule().returning(callback).times(1);
+                    metrics
+                        .expect_count()
+                        .with(eq(MetricEvent::Rescheduled(transition_succeeds)))
+                        .returning(|_| ())
+                        .times(1);
+                }
+            };
 
-        let schedule = new_schedule();
+            let scheduler = MessageScheduler::new(
+                Box::new(repository),
+                Box::new(transmitter),
+                Box::new(Utc::now),
+                Box::new(metrics),
+            );
 
-        let result = scheduler.transmit(&schedule);
-        assert!(result.is_err());
-    }
+            let schedule = new_schedule();
 
-    #[test]
-    fn test_mark_done_fail() {
-        let mut transmitter = MockTransmitter::new();
-        transmitter.expect_transmit().returning(|_| Ok(())).times(1);
-
-        let mut repository = MockRepository::new();
-        repository
-            .expect_mark_done()
-            .returning(|_| Err("Failed to mark done".into()))
-            .times(1);
-
-        let mut metrics = MockMetrics::new();
-        metrics
-            .expect_count()
-            .with(eq(MetricEvent::MarkedDoneError))
-            .returning(|_| ())
-            .times(1);
-
-        let scheduler = MessageScheduler::new(
-            Box::new(repository),
-            Box::new(transmitter),
-            Box::new(Utc::now),
-            Box::new(metrics),
-        );
-
-        let schedule = new_schedule();
-
-        let result = scheduler.transmit(&schedule);
-        assert!(result.is_err());
+            let result = scheduler.transmit(&schedule);
+            assert_eq!(
+                result.is_ok(),
+                test_case.success,
+                "Test case failed: {}",
+                test_case.name
+            );
+        }
     }
 
     #[test]
@@ -416,7 +421,7 @@ mod tests {
                 assert!(schedule_list
                     .clone()
                     .iter()
-                    .any(|schedule| schedule.id == schedule_id));
+                    .any(|schedule| &schedule.id == schedule_id));
 
                 Ok(())
             });
@@ -424,17 +429,17 @@ mod tests {
         let mut metrics = MockMetrics::new();
         metrics
             .expect_count()
-            .with(eq(MetricEvent::Polled))
+            .with(eq(MetricEvent::Polled(true)))
             .returning(|_| ())
             .times(1);
         metrics
             .expect_count()
-            .with(eq(MetricEvent::Transmitted))
+            .with(eq(MetricEvent::Transmitted(true)))
             .returning(|_| ())
             .times(amount_schedules);
         metrics
             .expect_count()
-            .with(eq(MetricEvent::MarkedDone))
+            .with(eq(MetricEvent::MarkedDone(true)))
             .returning(|_| ())
             .times(amount_schedules);
 
@@ -479,17 +484,17 @@ mod tests {
         let mut metrics = MockMetrics::new();
         metrics
             .expect_count()
-            .with(eq(MetricEvent::Polled))
+            .with(eq(MetricEvent::Polled(true)))
             .returning(|_| ())
             .times(1);
         metrics
             .expect_count()
-            .with(eq(MetricEvent::TransmittedError))
+            .with(eq(MetricEvent::Transmitted(false)))
             .returning(|_| ())
             .times(1);
         metrics
             .expect_count()
-            .with(eq(MetricEvent::Rescheduled))
+            .with(eq(MetricEvent::Rescheduled(true)))
             .returning(|_| ())
             .times(1);
 
@@ -555,45 +560,45 @@ mod tests {
             .expect_mark_done()
             .times(amount_schedules - 1)
             .returning(move |schedule_id| match schedule_id {
-                id if id != schedule_list[index_message_failure].id => Ok(()),
+                id if id != &schedule_list[index_message_failure].id => Ok(()),
                 _ => panic!("Unexpected message marked done"),
             });
         repository
             .expect_reschedule()
             .times(1)
             .returning(move |schedule_id| match schedule_id {
-                id if id == schedule_list_clone_0[index_message_failure].id => Ok(()),
+                id if id == &schedule_list_clone_0[index_message_failure].id => Ok(()),
                 _ => panic!("Unexpected restoration of scheduled message"),
             });
 
         let mut metrics = MockMetrics::new();
         metrics
             .expect_count()
-            .with(eq(MetricEvent::Polled))
+            .with(eq(MetricEvent::Polled(true)))
             .returning(|_| ())
             .times(1);
 
         // Metrics caused by success.
         metrics
             .expect_count()
-            .with(eq(MetricEvent::Transmitted))
+            .with(eq(MetricEvent::Transmitted(true)))
             .returning(|_| ())
             .times(amount_schedules - 1);
         metrics
             .expect_count()
-            .with(eq(MetricEvent::MarkedDone))
+            .with(eq(MetricEvent::MarkedDone(true)))
             .returning(|_| ())
             .times(amount_schedules - 1);
 
         // Metrics caused by failure.
         metrics
             .expect_count()
-            .with(eq(MetricEvent::TransmittedError))
+            .with(eq(MetricEvent::Transmitted(false)))
             .returning(|_| ())
             .times(1);
         metrics
             .expect_count()
-            .with(eq(MetricEvent::Rescheduled))
+            .with(eq(MetricEvent::Rescheduled(true)))
             .returning(|_| ())
             .times(1);
 
