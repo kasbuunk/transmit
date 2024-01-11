@@ -49,7 +49,7 @@ pub enum Message {
 #[derive(Clone)]
 pub struct MessageSchedule {
     id: Uuid,
-    pub schedule_pattern: SchedulePattern,
+    pub schedule_pattern: Option<SchedulePattern>,
     pub message: Message,
 }
 
@@ -57,8 +57,35 @@ impl MessageSchedule {
     pub fn new(schedule_pattern: SchedulePattern, message: Message) -> MessageSchedule {
         MessageSchedule {
             id: Uuid::new_v4(),
-            schedule_pattern,
+            schedule_pattern: Some(schedule_pattern),
             message,
+        }
+    }
+}
+
+impl Iterator for SchedulePattern {
+    type Item = SchedulePattern;
+
+    // next is called after transmission of the message, to transition the SchedulePattern to
+    // contain an easily comparable timestamp, such that it is easily retrieved by filtering
+    // on the next datetime. If None, the message schedule is completed.
+    fn next(&mut self) -> Option<SchedulePattern> {
+        match &self {
+            SchedulePattern::AtDateTime(_) => None,
+            SchedulePattern::PeriodicInterval(period) => match period.repeat {
+                Repeat::Infinitely => Some(SchedulePattern::PeriodicInterval(Periodic {
+                    next: period.next + period.interval,
+                    interval: period.interval,
+                    repeat: Repeat::Infinitely,
+                })),
+                Repeat::Times(0) => None,
+                Repeat::Times(n) => Some(SchedulePattern::PeriodicInterval(Periodic {
+                    next: period.next + period.interval,
+                    interval: period.interval,
+                    repeat: Repeat::Times(n - 1),
+                })),
+            },
+            _ => panic!("Implement me"),
         }
     }
 }
@@ -67,13 +94,7 @@ impl MessageSchedule {
 pub trait Repository {
     fn store_schedule(&self, schedule: MessageSchedule) -> Result<(), Box<dyn Error>>;
     fn poll_batch(&self, batch_size: u32) -> Result<Vec<MessageSchedule>, Box<dyn Error>>;
-    fn mark_done(&self, schedule_id: &Uuid) -> Result<(), Box<dyn Error>>;
-    fn set_next_periodic(
-        &self,
-        schedule_id: &Uuid,
-        next: &DateTime<Utc>,
-        repetitions: &Repeat,
-    ) -> Result<(), Box<dyn Error>>;
+    fn save(&self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>>;
     fn reschedule(&self, schedule_id: &Uuid) -> Result<(), Box<dyn Error>>;
 }
 
@@ -87,8 +108,7 @@ pub enum MetricEvent {
     Scheduled(bool),
     Polled(bool),
     Transmitted(bool),
-    MarkedDone(bool),
-    DecrementedPeriodic(bool),
+    ScheduleStateSaved(bool),
     Rescheduled(bool),
 }
 
@@ -169,8 +189,8 @@ impl MessageScheduler {
         schedules
             .iter()
             .filter(|schedule| match &schedule.schedule_pattern {
-                SchedulePattern::AtDateTime(datetime) => datetime < &(self.now)(),
-                SchedulePattern::PeriodicInterval(periodic) => periodic.next < (self.now)(),
+                Some(SchedulePattern::AtDateTime(datetime)) => datetime < &(self.now)(),
+                Some(SchedulePattern::PeriodicInterval(periodic)) => periodic.next < (self.now)(),
                 _ => panic!("Implement me"),
             })
             .map(|schedule| match self.transmit(schedule) {
@@ -193,67 +213,30 @@ impl MessageScheduler {
         let transmission_result = self.transmitter.transmit(schedule.message.clone());
 
         match transmission_result {
-            Ok(_) => match &schedule.schedule_pattern {
-                SchedulePattern::AtDateTime(_) => {
-                    let state_transition_result = self.repository.mark_done(&schedule.id);
-                    match state_transition_result {
-                        Ok(_) => {
-                            self.metrics.count(MetricEvent::MarkedDone(true));
-                            Ok(())
-                        }
-                        Err(err) => {
-                            self.metrics.count(MetricEvent::MarkedDone(false));
-                            Err(err)
-                        }
-                    }
-                }
-                SchedulePattern::PeriodicInterval(period) => {
-                    let next_datetime = period.next + period.interval;
+            Ok(_) => {
+                let schedule_pattern_clone = schedule.schedule_pattern.clone();
+                let next_schedule_pattern = match schedule_pattern_clone {
+                    None => None,
+                    Some(mut s) => s.next(),
+                };
+                let next_schedule = MessageSchedule {
+                    id: schedule.id,
+                    schedule_pattern: next_schedule_pattern,
+                    message: schedule.message.clone(),
+                };
 
-                    match period.repeat {
-                        Repeat::Infinitely => {
-                            let repetitions = Repeat::Infinitely;
-                            let state_transition_result = self.repository.set_next_periodic(
-                                &schedule.id,
-                                &next_datetime,
-                                &repetitions,
-                            );
-                            match state_transition_result {
-                                Ok(_) => {
-                                    self.metrics.count(MetricEvent::DecrementedPeriodic(true));
-                                    Ok(())
-                                }
-                                Err(err) => {
-                                    self.metrics.count(MetricEvent::DecrementedPeriodic(false));
-                                    Err(err)
-                                }
-                            }
-                        }
-                        Repeat::Times(0) => {
-                            let state_transition_result = self.repository.mark_done(&schedule.id);
-                            match state_transition_result {
-                                Ok(_) => {
-                                    self.metrics.count(MetricEvent::MarkedDone(true));
-                                    Ok(())
-                                }
-                                Err(err) => {
-                                    self.metrics.count(MetricEvent::MarkedDone(false));
-                                    Err(err)
-                                }
-                            }
-                        }
-                        Repeat::Times(n) => {
-                            let repetitions = Repeat::Times(n - 1);
-                            self.repository.set_next_periodic(
-                                &schedule.id,
-                                &next_datetime,
-                                &repetitions,
-                            )
-                        }
+                let state_transition_result = self.repository.save(&next_schedule);
+                match state_transition_result {
+                    Ok(_) => {
+                        self.metrics.count(MetricEvent::ScheduleStateSaved(true));
+                        Ok(())
+                    }
+                    Err(err) => {
+                        self.metrics.count(MetricEvent::ScheduleStateSaved(false));
+                        Err(err)
                     }
                 }
-                _ => panic!("Implement me"),
-            },
+            }
             Err(transmission_err) => {
                 match self.repository.reschedule(&schedule.id) {
                     Ok(_) => {
@@ -276,7 +259,6 @@ impl MessageScheduler {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     #[test]
@@ -346,7 +328,7 @@ mod tests {
         )
     }
 
-    fn new_schedule_periodic() -> MessageSchedule {
+    fn new_schedule_periodic_infinitely() -> MessageSchedule {
         MessageSchedule::new(
             SchedulePattern::PeriodicInterval(Periodic {
                 next: Utc::now() - chrono::Duration::milliseconds(10),
@@ -357,18 +339,39 @@ mod tests {
         )
     }
 
-    type StateTransitionFn = dyn Fn(&Uuid) -> Result<(), Box<dyn Error + 'static>> + Send;
-    type SetNextPeriodicFn =
-        dyn Fn(&Uuid, &DateTime<Utc>, &Repeat) -> Result<(), Box<dyn Error + 'static>> + Send;
+    fn new_schedule_periodic_n() -> MessageSchedule {
+        MessageSchedule::new(
+            SchedulePattern::PeriodicInterval(Periodic {
+                next: Utc::now() - chrono::Duration::milliseconds(10),
+                repeat: Repeat::Times(5),
+                interval: chrono::Duration::milliseconds(100),
+            }),
+            Message::Event("ArbitraryData".into()),
+        )
+    }
+
+    fn new_schedule_periodic_last() -> MessageSchedule {
+        MessageSchedule::new(
+            SchedulePattern::PeriodicInterval(Periodic {
+                next: Utc::now() - chrono::Duration::milliseconds(10),
+                repeat: Repeat::Times(0),
+                interval: chrono::Duration::milliseconds(100),
+            }),
+            Message::Event("ArbitraryData".into()),
+        )
+    }
+
+    type ScheduleSaveFn = dyn Fn(&MessageSchedule) -> Result<(), Box<dyn Error + 'static>> + Send;
+    type RescheduleFn = dyn Fn(&Uuid) -> Result<(), Box<dyn Error + 'static>> + Send;
 
     enum ScheduleStateTransition {
-        MarkDone(Box<StateTransitionFn>, bool),
-        SetNextPeriodic(Box<SetNextPeriodicFn>, bool),
-        Reschedule(Box<StateTransitionFn>, bool),
+        Save(Box<ScheduleSaveFn>, bool),
+        Reschedule(Box<RescheduleFn>, bool),
     }
 
     struct TransmissionTestCase {
         name: String,
+        schedule: MessageSchedule,
         transmission: Box<dyn Fn(Message) -> Result<(), Box<dyn Error + 'static>> + Send>,
         schedule_state_transition: ScheduleStateTransition,
         success: bool,
@@ -377,17 +380,20 @@ mod tests {
     #[test]
     fn test_transmission_and_appropriate_state_transition() {
         let test_cases = vec![
+            // Delayed message schedules.
             TransmissionTestCase {
-                name: "success".into(),
+                name: "delayed_success".into(),
+                schedule: new_schedule_delayed(),
                 transmission: Box::new(move |_| Ok(())),
-                schedule_state_transition: ScheduleStateTransition::MarkDone(
+                schedule_state_transition: ScheduleStateTransition::Save(
                     Box::new(move |_| Ok(())),
                     true,
                 ),
                 success: true,
             },
             TransmissionTestCase {
-                name: "fail_and_reschedule".into(),
+                name: "delayed_fail_and_reschedule".into(),
+                schedule: new_schedule_delayed(),
                 transmission: Box::new(move |_| Err("Let's hope this gets rescheduled.".into())),
                 schedule_state_transition: ScheduleStateTransition::Reschedule(
                     Box::new(move |_| Ok(())),
@@ -396,16 +402,141 @@ mod tests {
                 success: false,
             },
             TransmissionTestCase {
-                name: "transmit_but_fail_mark_done".into(),
+                name: "delayed_transmit_but_fail_mark_done".into(),
+                schedule: new_schedule_delayed(),
                 transmission: Box::new(move |_| Ok(())),
-                schedule_state_transition: ScheduleStateTransition::MarkDone(
+                schedule_state_transition: ScheduleStateTransition::Save(
                     Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
                     false,
                 ),
                 success: false,
             },
             TransmissionTestCase {
-                name: "transmit_fail_and_reschedule_fail".into(),
+                name: "delayed_transmit_fail_and_reschedule_fail".into(),
+                schedule: new_schedule_delayed(),
+                transmission: Box::new(move |_| Err("Even the reschedule hereafter fails".into())),
+                schedule_state_transition: ScheduleStateTransition::Reschedule(
+                    Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
+                    false,
+                ),
+                success: false,
+            },
+            // Periodic interval schedules.
+            TransmissionTestCase {
+                name: "periodic_success".into(),
+                schedule: new_schedule_periodic_infinitely(),
+                transmission: Box::new(move |_| Ok(())),
+                schedule_state_transition: ScheduleStateTransition::Save(
+                    Box::new(move |_| Ok(())),
+                    true,
+                ),
+                success: true,
+            },
+            TransmissionTestCase {
+                name: "periodic_fail_and_reschedule".into(),
+                schedule: new_schedule_periodic_infinitely(),
+                transmission: Box::new(move |_| Err("Let's hope this gets rescheduled.".into())),
+                schedule_state_transition: ScheduleStateTransition::Reschedule(
+                    Box::new(move |_| Ok(())),
+                    true,
+                ),
+                success: false,
+            },
+            TransmissionTestCase {
+                name: "periodic_transmit_but_fail_state_transition".into(),
+                schedule: new_schedule_periodic_infinitely(),
+                transmission: Box::new(move |_| Ok(())),
+                schedule_state_transition: ScheduleStateTransition::Save(
+                    Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
+                    false,
+                ),
+                success: false,
+            },
+            TransmissionTestCase {
+                name: "periodic_transmit_fail_and_reschedule_fail".into(),
+                schedule: new_schedule_periodic_infinitely(),
+                transmission: Box::new(move |_| Err("Even the reschedule hereafter fails".into())),
+                schedule_state_transition: ScheduleStateTransition::Reschedule(
+                    Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
+                    false,
+                ),
+                success: false,
+            },
+            // Repeat finitely
+            TransmissionTestCase {
+                name: "repeat_n_times_success".into(),
+                schedule: new_schedule_periodic_n(),
+                transmission: Box::new(move |_| Ok(())),
+                schedule_state_transition: ScheduleStateTransition::Save(
+                    Box::new(move |_| Ok(())),
+                    true,
+                ),
+                success: true,
+            },
+            TransmissionTestCase {
+                name: "repeat_n_times_fail_and_reschedule".into(),
+                schedule: new_schedule_periodic_n(),
+                transmission: Box::new(move |_| Err("Let's hope this gets rescheduled.".into())),
+                schedule_state_transition: ScheduleStateTransition::Reschedule(
+                    Box::new(move |_| Ok(())),
+                    true,
+                ),
+                success: false,
+            },
+            TransmissionTestCase {
+                name: "repeat_n_times_fail_state_transition".into(),
+                schedule: new_schedule_periodic_n(),
+                transmission: Box::new(move |_| Ok(())),
+                schedule_state_transition: ScheduleStateTransition::Save(
+                    Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
+                    false,
+                ),
+                success: false,
+            },
+            TransmissionTestCase {
+                name: "repeat_n_times_reschedule_fail".into(),
+                schedule: new_schedule_periodic_n(),
+                transmission: Box::new(move |_| Err("Even the reschedule hereafter fails".into())),
+                schedule_state_transition: ScheduleStateTransition::Reschedule(
+                    Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
+                    false,
+                ),
+                success: false,
+            },
+            // Repeat for the last time.
+            TransmissionTestCase {
+                name: "repeat_last_success".into(),
+                schedule: new_schedule_periodic_last(),
+                transmission: Box::new(move |_| Ok(())),
+                schedule_state_transition: ScheduleStateTransition::Save(
+                    Box::new(move |_| Ok(())),
+                    true,
+                ),
+                success: true,
+            },
+            TransmissionTestCase {
+                name: "repeat_last_fail_reschedule".into(),
+                schedule: new_schedule_periodic_last(),
+                transmission: Box::new(move |_| Err("Let's hope this gets rescheduled.".into())),
+                schedule_state_transition: ScheduleStateTransition::Reschedule(
+                    Box::new(move |_| Ok(())),
+                    true,
+                ),
+                success: false,
+            },
+            TransmissionTestCase {
+                name: "repeat_last_fail_state_transition".into(),
+                schedule: new_schedule_periodic_last(),
+                transmission: Box::new(move |_| Ok(())),
+                schedule_state_transition: ScheduleStateTransition::Save(
+                    Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
+                    false,
+                ),
+                success: false,
+            },
+            TransmissionTestCase {
+                name: "repeat_last_reschedule_fail".into(),
+                schedule: new_schedule_periodic_last(),
                 transmission: Box::new(move |_| Err("Even the reschedule hereafter fails".into())),
                 schedule_state_transition: ScheduleStateTransition::Reschedule(
                     Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
@@ -426,112 +557,11 @@ mod tests {
                 .times(1);
 
             match test_case.schedule_state_transition {
-                ScheduleStateTransition::MarkDone(callback, transition_succeeds) => {
-                    repository.expect_mark_done().returning(callback).times(1);
+                ScheduleStateTransition::Save(callback, transition_succeeds) => {
+                    repository.expect_save().returning(callback).times(1);
                     metrics
                         .expect_count()
-                        .with(eq(MetricEvent::MarkedDone(transition_succeeds)))
-                        .returning(|_| ())
-                        .times(1);
-                }
-                ScheduleStateTransition::Reschedule(callback, transition_succeeds) => {
-                    repository.expect_reschedule().returning(callback).times(1);
-                    metrics
-                        .expect_count()
-                        .with(eq(MetricEvent::Rescheduled(transition_succeeds)))
-                        .returning(|_| ())
-                        .times(1);
-                }
-                _ => panic!("Unexpected test case"),
-            };
-
-            let scheduler = MessageScheduler::new(
-                Box::new(repository),
-                Box::new(transmitter),
-                Box::new(Utc::now),
-                Box::new(metrics),
-            );
-
-            let schedule = new_schedule_delayed();
-
-            let result = scheduler.transmit(&schedule);
-            assert_eq!(
-                result.is_ok(),
-                test_case.success,
-                "Test case failed: {}",
-                test_case.name
-            );
-        }
-    }
-
-    #[test]
-    fn test_periodic_interval_mock_errors() {
-        let test_cases = vec![
-            TransmissionTestCase {
-                name: "success".into(),
-                transmission: Box::new(move |_| Ok(())),
-                schedule_state_transition: ScheduleStateTransition::SetNextPeriodic(
-                    Box::new(move |_, _, _| Ok(())),
-                    true,
-                ),
-                success: true,
-            },
-            TransmissionTestCase {
-                name: "fail_and_reschedule".into(),
-                transmission: Box::new(move |_| Err("Let's hope this gets rescheduled.".into())),
-                schedule_state_transition: ScheduleStateTransition::Reschedule(
-                    Box::new(move |_| Ok(())),
-                    true,
-                ),
-                success: false,
-            },
-            TransmissionTestCase {
-                name: "transmit_but_fail_state_transition".into(),
-                transmission: Box::new(move |_| Ok(())),
-                schedule_state_transition: ScheduleStateTransition::SetNextPeriodic(
-                    Box::new(move |_, _, _| Err("The schedule is stuck in doing now.".into())),
-                    false,
-                ),
-                success: false,
-            },
-            TransmissionTestCase {
-                name: "transmit_fail_and_reschedule_fail".into(),
-                transmission: Box::new(move |_| Err("Even the reschedule hereafter fails".into())),
-                schedule_state_transition: ScheduleStateTransition::Reschedule(
-                    Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
-                    false,
-                ),
-                success: false,
-            },
-        ];
-
-        for test_case in test_cases {
-            let mut transmitter = MockTransmitter::new();
-            let mut repository = MockRepository::new();
-            let mut metrics = MockMetrics::new();
-
-            transmitter
-                .expect_transmit()
-                .returning(test_case.transmission)
-                .times(1);
-
-            match test_case.schedule_state_transition {
-                ScheduleStateTransition::MarkDone(callback, transition_succeeds) => {
-                    repository.expect_mark_done().returning(callback).times(1);
-                    metrics
-                        .expect_count()
-                        .with(eq(MetricEvent::MarkedDone(transition_succeeds)))
-                        .returning(|_| ())
-                        .times(1);
-                }
-                ScheduleStateTransition::SetNextPeriodic(callback, transition_succeeds) => {
-                    repository
-                        .expect_set_next_periodic()
-                        .returning(callback)
-                        .times(1);
-                    metrics
-                        .expect_count()
-                        .with(eq(MetricEvent::DecrementedPeriodic(transition_succeeds)))
+                        .with(eq(MetricEvent::ScheduleStateSaved(transition_succeeds)))
                         .returning(|_| ())
                         .times(1);
                 }
@@ -552,9 +582,7 @@ mod tests {
                 Box::new(metrics),
             );
 
-            let schedule = new_schedule_periodic();
-
-            let result = scheduler.transmit(&schedule);
+            let result = scheduler.transmit(&test_case.schedule);
             assert_eq!(
                 result.is_ok(),
                 test_case.success,
@@ -586,14 +614,14 @@ mod tests {
             .returning(|_message| Ok(()));
 
         repository
-            .expect_mark_done()
+            .expect_save()
             .times(amount_schedules)
-            .returning(move |schedule_id| {
+            .returning(move |schedule| {
                 // This schedule belongs to the original list constructed.
                 assert!(schedule_list
                     .clone()
                     .iter()
-                    .any(|schedule| &schedule.id == schedule_id));
+                    .any(|schedule_iter| &schedule_iter.id == &schedule.id));
 
                 Ok(())
             });
@@ -611,7 +639,7 @@ mod tests {
             .times(amount_schedules);
         metrics
             .expect_count()
-            .with(eq(MetricEvent::MarkedDone(true)))
+            .with(eq(MetricEvent::ScheduleStateSaved(true)))
             .returning(|_| ())
             .times(amount_schedules);
 
@@ -729,10 +757,10 @@ mod tests {
             });
 
         repository
-            .expect_mark_done()
+            .expect_save()
             .times(amount_schedules - 1)
-            .returning(move |schedule_id| match schedule_id {
-                id if id != &schedule_list[index_message_failure].id => Ok(()),
+            .returning(move |schedule| match schedule.id {
+                id if &id != &schedule_list[index_message_failure].id => Ok(()),
                 _ => panic!("Unexpected message marked done"),
             });
         repository
@@ -758,7 +786,7 @@ mod tests {
             .times(amount_schedules - 1);
         metrics
             .expect_count()
-            .with(eq(MetricEvent::MarkedDone(true)))
+            .with(eq(MetricEvent::ScheduleStateSaved(true)))
             .returning(|_| ())
             .times(amount_schedules - 1);
 
