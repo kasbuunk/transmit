@@ -11,42 +11,32 @@ use mockall::{automock, mock, predicate::*};
 
 static BATCH_SIZE: u32 = 100;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Repeat {
     Infinitely,
     Times(u32),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Periodic {
     pub next: DateTime<Utc>,
     pub interval: chrono::Duration,
     pub repeat: Repeat,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SchedulePattern {
     AtDateTime(DateTime<Utc>),
     Cron(Schedule, Repeat),
     PeriodicInterval(Periodic),
 }
 
-#[derive(Clone, PartialEq)]
-pub enum State {
-    // A process can be dedicated to transition a task's state from scheduled to queued.
-    Scheduled,
-    // A process is currently picking up this message to dispatch it.
-    Doing,
-    // The scheduled message has been transmitted.
-    Done,
-}
-
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Message {
     Event(String),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MessageSchedule {
     id: Uuid,
     pub schedule_pattern: Option<SchedulePattern>,
@@ -260,6 +250,88 @@ impl MessageScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_finite_periodic_interval() {
+        let mut transmitter = MockTransmitter::new();
+        let mut repository = MockRepository::new();
+        let mut metrics = MockMetrics::new();
+
+        let repetitions = 2;
+        let just_now = Utc::now() - chrono::Duration::milliseconds(10);
+        let interval = chrono::Duration::milliseconds(100);
+
+        let original_schedule = MessageSchedule::new(
+            SchedulePattern::PeriodicInterval(Periodic {
+                next: just_now,
+                repeat: Repeat::Times(repetitions),
+                interval,
+            }),
+            Message::Event("ArbitraryData".into()),
+        );
+
+        let expected_schedule_second_to_last = MessageSchedule {
+            id: original_schedule.id,
+            schedule_pattern: Some(SchedulePattern::PeriodicInterval(Periodic {
+                next: just_now + interval,
+                repeat: Repeat::Times(repetitions - 1),
+                interval,
+            })),
+            message: original_schedule.message.clone(),
+        };
+        let expected_schedule_last = MessageSchedule {
+            id: original_schedule.id,
+            schedule_pattern: Some(SchedulePattern::PeriodicInterval(Periodic {
+                next: just_now + interval + interval,
+                repeat: Repeat::Times(repetitions - 2),
+                interval,
+            })),
+            message: original_schedule.message.clone(),
+        };
+        let expected_schedule_done = MessageSchedule {
+            id: original_schedule.id,
+            schedule_pattern: None,
+            message: original_schedule.message.clone(),
+        };
+
+        repository
+            .expect_save()
+            .with(eq(expected_schedule_second_to_last.clone()))
+            .returning(|_| Ok(()))
+            .times(1);
+        repository
+            .expect_save()
+            .with(eq(expected_schedule_last.clone()))
+            .returning(|_| Ok(()))
+            .times(1);
+        repository
+            .expect_save()
+            .with(eq(expected_schedule_done))
+            .returning(|_| Ok(()))
+            .times(1);
+
+        transmitter.expect_transmit().returning(|_| Ok(())).times(3);
+
+        metrics
+            .expect_count()
+            .with(eq(MetricEvent::ScheduleStateSaved(true)))
+            .returning(|_| ())
+            .times(3);
+
+        let scheduler = MessageScheduler::new(
+            Box::new(repository),
+            Box::new(transmitter),
+            Box::new(Utc::now),
+            Box::new(metrics),
+        );
+
+        let result = scheduler.transmit(&original_schedule);
+        assert!(result.is_ok());
+        let result = scheduler.transmit(&expected_schedule_second_to_last);
+        assert!(result.is_ok());
+        let result = scheduler.transmit(&expected_schedule_last);
+        assert!(result.is_ok());
+    }
 
     #[test]
     fn test_schedule() {
