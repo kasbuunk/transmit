@@ -18,7 +18,7 @@ pub enum Repeat {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Periodic {
+pub struct Interval {
     pub next: DateTime<Utc>,
     pub interval: chrono::Duration,
     pub repeat: Repeat,
@@ -26,9 +26,9 @@ pub struct Periodic {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SchedulePattern {
-    AtDateTime(DateTime<Utc>),
+    Delayed(DateTime<Utc>),
     Cron(Schedule, Repeat),
-    PeriodicInterval(Periodic),
+    Interval(Interval),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,15 +61,15 @@ impl Iterator for SchedulePattern {
     // on the next datetime. If None, the message schedule is completed.
     fn next(&mut self) -> Option<SchedulePattern> {
         match &self {
-            SchedulePattern::AtDateTime(_) => None,
-            SchedulePattern::PeriodicInterval(period) => match period.repeat {
-                Repeat::Infinitely => Some(SchedulePattern::PeriodicInterval(Periodic {
+            SchedulePattern::Delayed(_) => None,
+            SchedulePattern::Interval(period) => match period.repeat {
+                Repeat::Infinitely => Some(SchedulePattern::Interval(Interval {
                     next: period.next + period.interval,
                     interval: period.interval,
                     repeat: Repeat::Infinitely,
                 })),
                 Repeat::Times(0) => None,
-                Repeat::Times(n) => Some(SchedulePattern::PeriodicInterval(Periodic {
+                Repeat::Times(n) => Some(SchedulePattern::Interval(Interval {
                     next: period.next + period.interval,
                     interval: period.interval,
                     repeat: Repeat::Times(n - 1),
@@ -179,8 +179,8 @@ impl MessageScheduler {
         schedules
             .iter()
             .filter(|schedule| match &schedule.schedule_pattern {
-                Some(SchedulePattern::AtDateTime(datetime)) => datetime < &(self.now)(),
-                Some(SchedulePattern::PeriodicInterval(periodic)) => periodic.next < (self.now)(),
+                Some(SchedulePattern::Delayed(datetime)) => datetime < &(self.now)(),
+                Some(SchedulePattern::Interval(periodic)) => periodic.next < (self.now)(),
                 _ => panic!("Implement me"),
             })
             .map(|schedule| match self.transmit(schedule) {
@@ -261,7 +261,7 @@ mod tests {
         let interval = chrono::Duration::milliseconds(100);
 
         let original_schedule = MessageSchedule::new(
-            SchedulePattern::PeriodicInterval(Periodic {
+            SchedulePattern::Interval(Interval {
                 next: just_now,
                 repeat: Repeat::Infinitely,
                 interval,
@@ -271,7 +271,7 @@ mod tests {
 
         let expected_schedule_0 = MessageSchedule {
             id: original_schedule.id,
-            schedule_pattern: Some(SchedulePattern::PeriodicInterval(Periodic {
+            schedule_pattern: Some(SchedulePattern::Interval(Interval {
                 next: just_now + interval,
                 repeat: Repeat::Infinitely,
                 interval,
@@ -280,7 +280,7 @@ mod tests {
         };
         let expected_schedule_1 = MessageSchedule {
             id: original_schedule.id,
-            schedule_pattern: Some(SchedulePattern::PeriodicInterval(Periodic {
+            schedule_pattern: Some(SchedulePattern::Interval(Interval {
                 next: just_now + interval + interval,
                 repeat: Repeat::Infinitely,
                 interval,
@@ -289,7 +289,7 @@ mod tests {
         };
         let expected_schedule_2 = MessageSchedule {
             id: original_schedule.id,
-            schedule_pattern: Some(SchedulePattern::PeriodicInterval(Periodic {
+            schedule_pattern: Some(SchedulePattern::Interval(Interval {
                 next: just_now + interval + interval + interval,
                 repeat: Repeat::Infinitely,
                 interval,
@@ -347,7 +347,7 @@ mod tests {
         let interval = chrono::Duration::milliseconds(100);
 
         let original_schedule = MessageSchedule::new(
-            SchedulePattern::PeriodicInterval(Periodic {
+            SchedulePattern::Interval(Interval {
                 next: just_now,
                 repeat: Repeat::Times(repetitions),
                 interval,
@@ -357,7 +357,7 @@ mod tests {
 
         let expected_schedule_second_to_last = MessageSchedule {
             id: original_schedule.id,
-            schedule_pattern: Some(SchedulePattern::PeriodicInterval(Periodic {
+            schedule_pattern: Some(SchedulePattern::Interval(Interval {
                 next: just_now + interval,
                 repeat: Repeat::Times(repetitions - 1),
                 interval,
@@ -366,7 +366,7 @@ mod tests {
         };
         let expected_schedule_last = MessageSchedule {
             id: original_schedule.id,
-            schedule_pattern: Some(SchedulePattern::PeriodicInterval(Periodic {
+            schedule_pattern: Some(SchedulePattern::Interval(Interval {
                 next: just_now + interval + interval,
                 repeat: Repeat::Times(repetitions - 2),
                 interval,
@@ -442,7 +442,7 @@ mod tests {
         );
 
         let now = Utc::now();
-        let pattern = SchedulePattern::AtDateTime(now);
+        let pattern = SchedulePattern::Delayed(now);
 
         let result = scheduler.schedule(pattern, Message::Event("DataBytes".into()));
         assert!(result.is_ok());
@@ -472,7 +472,7 @@ mod tests {
         );
 
         let now = Utc::now();
-        let pattern = SchedulePattern::AtDateTime(now);
+        let pattern = SchedulePattern::Delayed(now);
 
         let result = scheduler.schedule(pattern, Message::Event("DataBytes".into()));
         assert!(result.is_err());
@@ -480,14 +480,14 @@ mod tests {
 
     fn new_schedule_delayed() -> MessageSchedule {
         MessageSchedule::new(
-            SchedulePattern::AtDateTime(Utc::now() - chrono::Duration::milliseconds(10)),
+            SchedulePattern::Delayed(Utc::now() - chrono::Duration::milliseconds(10)),
             Message::Event("ArbitraryData".into()),
         )
     }
 
     fn new_schedule_periodic_infinitely() -> MessageSchedule {
         MessageSchedule::new(
-            SchedulePattern::PeriodicInterval(Periodic {
+            SchedulePattern::Interval(Interval {
                 next: Utc::now() - chrono::Duration::milliseconds(10),
                 repeat: Repeat::Infinitely,
                 interval: chrono::Duration::milliseconds(100),
@@ -498,7 +498,7 @@ mod tests {
 
     fn new_schedule_periodic_n() -> MessageSchedule {
         MessageSchedule::new(
-            SchedulePattern::PeriodicInterval(Periodic {
+            SchedulePattern::Interval(Interval {
                 next: Utc::now() - chrono::Duration::milliseconds(10),
                 repeat: Repeat::Times(5),
                 interval: chrono::Duration::milliseconds(100),
@@ -509,7 +509,7 @@ mod tests {
 
     fn new_schedule_periodic_last() -> MessageSchedule {
         MessageSchedule::new(
-            SchedulePattern::PeriodicInterval(Periodic {
+            SchedulePattern::Interval(Interval {
                 next: Utc::now() - chrono::Duration::milliseconds(10),
                 repeat: Repeat::Times(0),
                 interval: chrono::Duration::milliseconds(100),
@@ -818,7 +818,7 @@ mod tests {
         let ten_milliseconds = chrono::Duration::milliseconds(10);
 
         let schedules = vec![MessageSchedule::new(
-            SchedulePattern::AtDateTime(now - ten_milliseconds),
+            SchedulePattern::Delayed(now - ten_milliseconds),
             Message::Event(message_data.into()),
         )];
 
@@ -879,12 +879,12 @@ mod tests {
         let schedule_list = vec![
             MessageSchedule::new(
                 // Ready to process.
-                SchedulePattern::AtDateTime(now - ten_milliseconds),
+                SchedulePattern::Delayed(now - ten_milliseconds),
                 Message::Event(message_data_success.into()),
             ),
             MessageSchedule::new(
                 // Ready to process.
-                SchedulePattern::AtDateTime(now - ten_milliseconds),
+                SchedulePattern::Delayed(now - ten_milliseconds),
                 Message::Event(message_data_failure.into()),
             ),
         ];
