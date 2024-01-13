@@ -252,6 +252,91 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_infinite_periodic_interval() {
+        let mut transmitter = MockTransmitter::new();
+        let mut repository = MockRepository::new();
+        let mut metrics = MockMetrics::new();
+
+        let just_now = Utc::now() - chrono::Duration::milliseconds(10);
+        let interval = chrono::Duration::milliseconds(100);
+
+        let original_schedule = MessageSchedule::new(
+            SchedulePattern::PeriodicInterval(Periodic {
+                next: just_now,
+                repeat: Repeat::Infinitely,
+                interval,
+            }),
+            Message::Event("ArbitraryData".into()),
+        );
+
+        let expected_schedule_0 = MessageSchedule {
+            id: original_schedule.id,
+            schedule_pattern: Some(SchedulePattern::PeriodicInterval(Periodic {
+                next: just_now + interval,
+                repeat: Repeat::Infinitely,
+                interval,
+            })),
+            message: original_schedule.message.clone(),
+        };
+        let expected_schedule_1 = MessageSchedule {
+            id: original_schedule.id,
+            schedule_pattern: Some(SchedulePattern::PeriodicInterval(Periodic {
+                next: just_now + interval + interval,
+                repeat: Repeat::Infinitely,
+                interval,
+            })),
+            message: original_schedule.message.clone(),
+        };
+        let expected_schedule_2 = MessageSchedule {
+            id: original_schedule.id,
+            schedule_pattern: Some(SchedulePattern::PeriodicInterval(Periodic {
+                next: just_now + interval + interval + interval,
+                repeat: Repeat::Infinitely,
+                interval,
+            })),
+            message: original_schedule.message.clone(),
+        };
+
+        repository
+            .expect_save()
+            .with(eq(expected_schedule_0.clone()))
+            .returning(|_| Ok(()))
+            .times(1);
+        repository
+            .expect_save()
+            .with(eq(expected_schedule_1.clone()))
+            .returning(|_| Ok(()))
+            .times(1);
+        repository
+            .expect_save()
+            .with(eq(expected_schedule_2))
+            .returning(|_| Ok(()))
+            .times(1);
+
+        transmitter.expect_transmit().returning(|_| Ok(())).times(3);
+
+        metrics
+            .expect_count()
+            .with(eq(MetricEvent::ScheduleStateSaved(true)))
+            .returning(|_| ())
+            .times(3);
+
+        let scheduler = MessageScheduler::new(
+            Box::new(repository),
+            Box::new(transmitter),
+            Box::new(Utc::now),
+            Box::new(metrics),
+        );
+
+        let result = scheduler.transmit(&original_schedule);
+        assert!(result.is_ok());
+        let result = scheduler.transmit(&expected_schedule_0);
+        assert!(result.is_ok());
+        let result = scheduler.transmit(&expected_schedule_1);
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn test_finite_periodic_interval() {
         let mut transmitter = MockTransmitter::new();
         let mut repository = MockRepository::new();
