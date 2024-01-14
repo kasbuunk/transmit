@@ -274,10 +274,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_poll_non_ready_schedules() {
+    fn test_poll_non_ready_schedule() {
         let timestamp_now =
             DateTime::from_timestamp(1431648000, 0).expect("should be valid timestamp");
         assert_eq!(timestamp_now.to_string(), "2015-05-15 00:00:00 UTC");
+        let timestamp_some_time_later = timestamp_now.clone() + chrono::Duration::milliseconds(15);
+
         let repetitions = 5;
         let interval = chrono::Duration::milliseconds(100);
 
@@ -291,35 +293,51 @@ mod tests {
         )];
 
         let mut now = MockNow::new();
-        now.expect_now().times(1).returning(|| {
-            DateTime::from_timestamp(1431648000, 0).expect("should be valid timestamp")
-        });
+        now.expect_now().times(1).returning(move || timestamp_now);
+        now.expect_now()
+            .times(1)
+            .returning(move || timestamp_some_time_later);
 
         let mut repository = MockRepository::new();
         repository
             .expect_poll_batch()
-            .times(1)
+            .times(2)
             .returning(move |batch_size| {
                 assert_eq!(batch_size, BATCH_SIZE);
                 Ok(schedules_repeated_interval.clone())
             });
+        repository.expect_save().returning(|_| Ok(())).times(1);
 
-        let transmitter = MockTransmitter::new();
+        let mut transmitter = MockTransmitter::new();
+        transmitter.expect_transmit().returning(|_| Ok(())).times(1);
 
         let mut metrics = MockMetrics::new();
         metrics
             .expect_count()
             .with(eq(MetricEvent::Polled(true)))
             .returning(|_| ())
+            .times(2);
+        metrics
+            .expect_count()
+            .with(eq(MetricEvent::Transmitted(true)))
+            .returning(|_| ())
+            .times(1);
+        metrics
+            .expect_count()
+            .with(eq(MetricEvent::ScheduleStateSaved(true)))
+            .returning(|_| ())
             .times(1);
 
         let scheduler = MessageScheduler::new(
             Box::new(repository),
             Box::new(transmitter),
-            Box::new(now),
+            Box::new(now), // First call to now will be too early for the given time, the next will
+            // be right when the schedule is met.
             Box::new(metrics),
         );
 
+        let result = scheduler.process_batch();
+        assert!(result.is_ok());
         let result = scheduler.process_batch();
         assert!(result.is_ok());
     }
