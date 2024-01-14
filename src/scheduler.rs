@@ -93,6 +93,28 @@ pub trait Transmitter {
     fn transmit(&self, message: Message) -> Result<(), Box<dyn Error>>;
 }
 
+#[cfg_attr(test, automock)]
+pub trait Now {
+    fn now(&self) -> DateTime<Utc>;
+}
+
+impl<F> Now for F
+where
+    F: Fn() -> DateTime<Utc>,
+{
+    fn now(&self) -> DateTime<Utc> {
+        self()
+    }
+}
+
+pub struct UtcNow;
+
+impl Now for UtcNow {
+    fn now(&self) -> DateTime<Utc> {
+        Utc::now()
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum MetricEvent {
     Scheduled(bool),
@@ -114,7 +136,7 @@ pub struct MessageScheduler {
     // transmitter sends the message according to the configured communication protocol.
     transmitter: Box<dyn Transmitter>,
     // now is used to inject a mockable function to simulate the system's current datetime.
-    now: Box<dyn Fn() -> DateTime<Utc>>,
+    now: Box<dyn Now>,
     // metrics measures events of interest.
     metrics: Box<dyn Metrics>,
 }
@@ -123,7 +145,7 @@ impl MessageScheduler {
     pub fn new(
         repository: Box<dyn Repository>,
         transmitter: Box<dyn Transmitter>,
-        now: Box<dyn Fn() -> DateTime<Utc>>,
+        now: Box<dyn Now>,
         metrics: Box<dyn Metrics>,
     ) -> MessageScheduler {
         MessageScheduler {
@@ -179,8 +201,8 @@ impl MessageScheduler {
         schedules
             .iter()
             .filter(|schedule| match &schedule.schedule_pattern {
-                Some(SchedulePattern::Delayed(datetime)) => datetime < &(self.now)(),
-                Some(SchedulePattern::Interval(periodic)) => periodic.next < (self.now)(),
+                Some(SchedulePattern::Delayed(datetime)) => datetime < &(self.now).now(),
+                Some(SchedulePattern::Interval(periodic)) => periodic.next < (self.now).now(),
                 _ => panic!("Implement me"),
             })
             .map(|schedule| match self.transmit(schedule) {
