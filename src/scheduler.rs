@@ -274,6 +274,57 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_poll_non_ready_schedules() {
+        let timestamp_now =
+            DateTime::from_timestamp(1431648000, 0).expect("should be valid timestamp");
+        assert_eq!(timestamp_now.to_string(), "2015-05-15 00:00:00 UTC");
+        let repetitions = 5;
+        let interval = chrono::Duration::milliseconds(100);
+
+        let schedules_repeated_interval = vec![MessageSchedule::new(
+            SchedulePattern::Interval(Interval {
+                next: timestamp_now + chrono::Duration::milliseconds(10),
+                repeat: Repeat::Times(repetitions),
+                interval: interval,
+            }),
+            Message::Event("ArbitraryData".into()),
+        )];
+
+        let mut now = MockNow::new();
+        now.expect_now().times(1).returning(|| {
+            DateTime::from_timestamp(1431648000, 0).expect("should be valid timestamp")
+        });
+
+        let mut repository = MockRepository::new();
+        repository
+            .expect_poll_batch()
+            .times(1)
+            .returning(move |batch_size| {
+                assert_eq!(batch_size, BATCH_SIZE);
+                Ok(schedules_repeated_interval.clone())
+            });
+
+        let transmitter = MockTransmitter::new();
+
+        let mut metrics = MockMetrics::new();
+        metrics
+            .expect_count()
+            .with(eq(MetricEvent::Polled(true)))
+            .returning(|_| ())
+            .times(1);
+
+        let scheduler = MessageScheduler::new(
+            Box::new(repository),
+            Box::new(transmitter),
+            Box::new(now),
+            Box::new(metrics),
+        );
+
+        let result = scheduler.process_batch();
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn test_infinite_periodic_interval() {
         let mut transmitter = MockTransmitter::new();
         let mut repository = MockRepository::new();
