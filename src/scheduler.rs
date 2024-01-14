@@ -278,6 +278,73 @@ mod tests {
         let timestamp_now =
             DateTime::from_timestamp(1431648000, 0).expect("should be valid timestamp");
         assert_eq!(timestamp_now.to_string(), "2015-05-15 00:00:00 UTC");
+        let repetitions = 5;
+        let interval = chrono::Duration::milliseconds(100);
+        let bit_later = chrono::Duration::milliseconds(10);
+
+        let test_cases = vec![
+            vec![],
+            vec![MessageSchedule::new(
+                SchedulePattern::Interval(Interval {
+                    next: timestamp_now + bit_later,
+                    repeat: Repeat::Times(repetitions),
+                    interval: interval,
+                }),
+                Message::Event("ArbitraryData".into()),
+            )],
+            vec![MessageSchedule::new(
+                SchedulePattern::Interval(Interval {
+                    next: DateTime::<Utc>::MAX_UTC,
+                    repeat: Repeat::Times(repetitions),
+                    interval: interval,
+                }),
+                Message::Event("ArbitraryData".into()),
+            )],
+        ];
+
+        for test_case_schedules in test_cases {
+            let mut now = MockNow::new();
+            now.expect_now()
+                .times(test_case_schedules.len())
+                .returning(|| {
+                    DateTime::from_timestamp(1431648000, 0).expect("should be valid timestamp")
+                });
+
+            let mut repository = MockRepository::new();
+            repository
+                .expect_poll_batch()
+                .times(1)
+                .returning(move |batch_size| {
+                    assert_eq!(batch_size, BATCH_SIZE);
+                    Ok(test_case_schedules.clone())
+                });
+
+            let transmitter = MockTransmitter::new();
+
+            let mut metrics = MockMetrics::new();
+            metrics
+                .expect_count()
+                .with(eq(MetricEvent::Polled(true)))
+                .returning(|_| ())
+                .times(1);
+
+            let scheduler = MessageScheduler::new(
+                Box::new(repository),
+                Box::new(transmitter),
+                Box::new(now),
+                Box::new(metrics),
+            );
+
+            let result = scheduler.process_batch();
+            assert!(result.is_ok());
+        }
+    }
+
+    #[test]
+    fn test_poll_before_and_after_next() {
+        let timestamp_now =
+            DateTime::from_timestamp(1431648000, 0).expect("should be valid timestamp");
+        assert_eq!(timestamp_now.to_string(), "2015-05-15 00:00:00 UTC");
         let timestamp_some_time_later = timestamp_now.clone() + chrono::Duration::milliseconds(15);
 
         let repetitions = 5;
