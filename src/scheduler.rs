@@ -73,7 +73,7 @@ impl Cron {
 pub struct Delayed {
     transmit_at: DateTime<Utc>,
     next: Option<DateTime<Utc>>,
-    transmitted: bool,
+    transmission_count: u32,
 }
 
 impl Delayed {
@@ -81,7 +81,7 @@ impl Delayed {
         Delayed {
             transmit_at,
             next: Some(transmit_at),
-            transmitted: false,
+            transmission_count: 0,
         }
     }
 }
@@ -102,7 +102,7 @@ impl SchedulePattern {
             SchedulePattern::Delayed(delayed) => SchedulePattern::Delayed(Delayed {
                 transmit_at: delayed.transmit_at,
                 next: None,
-                transmitted: true,
+                transmission_count: 1,
             }),
 
             SchedulePattern::Interval(interval) => match interval.repeat {
