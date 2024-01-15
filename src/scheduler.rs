@@ -25,9 +25,30 @@ pub struct Interval {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cron {
+    pub next: Option<DateTime<Utc>>,
+    pub start: DateTime<Utc>,
+    pub schedule: Schedule,
+    pub transmission_count: u32,
+    pub repeat: Repeat,
+}
+
+impl Cron {
+    pub fn new(start: DateTime<Utc>, schedule: Schedule, repeat: Repeat) -> Cron {
+        Cron {
+            start,
+            next: schedule.after(&start).next(),
+            schedule,
+            transmission_count: 0,
+            repeat,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SchedulePattern {
     Delayed(DateTime<Utc>),
-    Cron(Schedule, Repeat),
+    Cron(Cron),
     Interval(Interval),
 }
 
@@ -75,7 +96,33 @@ impl Iterator for SchedulePattern {
                     repeat: Repeat::Times(n - 1),
                 })),
             },
-            _ => panic!("Implement me"),
+            SchedulePattern::Cron(cron_schedule) => match cron_schedule.repeat {
+                Repeat::Times(repetitions) => {
+                    match cron_schedule.transmission_count < repetitions {
+                        false => None,
+                        true => Some(SchedulePattern::Cron(Cron {
+                            start: cron_schedule.start,
+                            next: cron_schedule
+                                .schedule
+                                .after(&cron_schedule.start)
+                                .nth((cron_schedule.transmission_count + 1) as usize),
+                            schedule: cron_schedule.schedule.clone(),
+                            transmission_count: cron_schedule.transmission_count + 1,
+                            repeat: cron_schedule.repeat.clone(),
+                        })),
+                    }
+                }
+                Repeat::Infinitely => Some(SchedulePattern::Cron(Cron {
+                    start: cron_schedule.start,
+                    next: cron_schedule
+                        .schedule
+                        .upcoming(Utc)
+                        .nth((cron_schedule.transmission_count + 1) as usize),
+                    schedule: cron_schedule.schedule.clone(),
+                    transmission_count: cron_schedule.transmission_count + 1,
+                    repeat: Repeat::Infinitely,
+                })),
+            },
         }
     }
 }
@@ -203,7 +250,11 @@ impl MessageScheduler {
             .filter(|schedule| match &schedule.schedule_pattern {
                 Some(SchedulePattern::Delayed(datetime)) => datetime < &(self.now).now(),
                 Some(SchedulePattern::Interval(periodic)) => periodic.next < (self.now).now(),
-                _ => panic!("Implement me"),
+                Some(SchedulePattern::Cron(cron_schedule)) => match cron_schedule.next {
+                    None => false,
+                    Some(next) => next < (self.now).now(),
+                },
+                None => false,
             })
             .map(|schedule| match self.transmit(schedule) {
                 Ok(_) => {
@@ -272,12 +323,16 @@ impl MessageScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mockall::Sequence;
+    use std::str::FromStr;
 
     #[test]
     fn test_poll_non_ready_schedule() {
         let timestamp_now =
             DateTime::from_timestamp(1431648000, 0).expect("should be valid timestamp");
         assert_eq!(timestamp_now.to_string(), "2015-05-15 00:00:00 UTC");
+        let timestamp_now_clone = timestamp_now.clone();
+
         let repetitions = 5;
         let interval = chrono::Duration::milliseconds(100);
         let bit_later = chrono::Duration::milliseconds(10);
@@ -306,9 +361,7 @@ mod tests {
             let mut now = MockNow::new();
             now.expect_now()
                 .times(test_case_schedules.len())
-                .returning(|| {
-                    DateTime::from_timestamp(1431648000, 0).expect("should be valid timestamp")
-                });
+                .returning(move || timestamp_now_clone);
 
             let mut repository = MockRepository::new();
             repository
@@ -1124,6 +1177,120 @@ mod tests {
             Box::new(metrics),
         );
 
+        let result = scheduler.process_batch();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_cron() {
+        // Friday 15 May 2015;
+        let timestamp_first_poll = Utc.with_ymd_and_hms(2015, 5, 15, 0, 0, 0).unwrap();
+        assert_eq!(timestamp_first_poll.to_string(), "2015-05-15 00:00:00 UTC");
+        let timestamp_first_poll_clone = timestamp_first_poll.clone();
+
+        // Every minute at 5 seconds of every hour, starting midnight, on any Fridays in May 2015.
+        let expression = "5 * * * May Fri 2015";
+        let cron_schedule =
+            cron::Schedule::from_str(expression).expect("should be valid cron schedule");
+
+        let schedule = MessageSchedule::new(
+            SchedulePattern::Cron(Cron::new(
+                timestamp_first_poll,
+                cron_schedule.clone(),
+                Repeat::Times(5),
+            )),
+            Message::Event("ArbitraryData".into()),
+        );
+
+        let mut sequence = Sequence::new();
+        let mut repository = MockRepository::new();
+        let mut now = MockNow::new();
+        let mut transmitter = MockTransmitter::new();
+        let mut metrics = MockMetrics::new();
+
+        let schedule_first_poll = schedule.clone();
+        let schedule_second_poll = schedule.clone();
+
+        // First poll: no ready schedules yet, so no transmission.
+        repository
+            .expect_poll_batch()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(move |_| Ok(vec![schedule_first_poll.clone()]));
+        metrics
+            .expect_count()
+            .with(eq(MetricEvent::Polled(true)))
+            .times(1)
+            .returning(|_| ());
+        now.expect_now()
+            .times(1)
+            .returning(move || timestamp_first_poll_clone.clone());
+
+        // Second poll: schedule is ready: so transmit.
+        let expected_cron_schedule_pattern = Cron {
+            start: timestamp_first_poll,
+            next: Some(Utc.with_ymd_and_hms(2015, 5, 15, 0, 1, 5).unwrap()),
+            repeat: Repeat::Times(5),
+            transmission_count: 1,
+            schedule: cron_schedule.clone(),
+        };
+        repository
+            .expect_poll_batch()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(move |_| Ok(vec![schedule_second_poll.clone()]));
+        metrics
+            .expect_count()
+            .with(eq(MetricEvent::Polled(true)))
+            .times(1)
+            .returning(|_| ());
+        now.expect_now()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(move || timestamp_first_poll_clone + chrono::Duration::seconds(10));
+        transmitter
+            .expect_transmit()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(move |_| Ok(()));
+        repository
+            .expect_save()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(move |schedule| {
+                match &schedule.schedule_pattern {
+                    Some(pattern) => match pattern {
+                        SchedulePattern::Cron(cron_message_schedule) => {
+                            assert_eq!(cron_message_schedule, &expected_cron_schedule_pattern);
+                        }
+                        _ => panic!("unexpected schedule pattern"),
+                    },
+                    None => panic!("expected some schedule pattern"),
+                }
+                Ok(())
+            });
+        metrics
+            .expect_count()
+            .with(eq(MetricEvent::Transmitted(true)))
+            .returning(|_| ())
+            .times(1);
+        metrics
+            .expect_count()
+            .with(eq(MetricEvent::ScheduleStateSaved(true)))
+            .returning(|_| ())
+            .times(1);
+
+        let scheduler = MessageScheduler::new(
+            Box::new(repository),
+            Box::new(transmitter),
+            Box::new(now),
+            Box::new(metrics),
+        );
+
+        // First poll.
+        let result = scheduler.process_batch();
+        assert!(result.is_ok());
+        // Second poll.
         let result = scheduler.process_batch();
         assert!(result.is_ok());
     }
