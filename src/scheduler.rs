@@ -119,7 +119,7 @@ impl Iterator for SchedulePattern {
                     start: cron_schedule.start,
                     next: cron_schedule
                         .schedule
-                        .upcoming(Utc)
+                        .after(&cron_schedule.start)
                         .nth((cron_schedule.transmission_count + 1) as usize),
                     schedule: cron_schedule.schedule.clone(),
                     transmission_count: cron_schedule.transmission_count + 1,
