@@ -19,15 +19,29 @@ pub enum Repeat {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Interval {
-    pub next: DateTime<Utc>,
+    pub start: DateTime<Utc>,
+    pub next: Option<DateTime<Utc>>,
     pub interval: chrono::Duration,
+    pub transmission_count: u32,
     pub repeat: Repeat,
+}
+
+impl Interval {
+    pub fn new(start: DateTime<Utc>, interval: chrono::Duration, repeat: Repeat) -> Interval {
+        Interval {
+            start,
+            next: Some(start),
+            interval,
+            transmission_count: 0,
+            repeat,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cron {
-    pub next: Option<DateTime<Utc>>,
     pub start: DateTime<Utc>,
+    pub next: Option<DateTime<Utc>>,
     pub schedule: Schedule,
     pub transmission_count: u32,
     pub repeat: Repeat,
@@ -52,28 +66,6 @@ pub enum SchedulePattern {
     Interval(Interval),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Message {
-    Event(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MessageSchedule {
-    id: Uuid,
-    pub schedule_pattern: Option<SchedulePattern>,
-    pub message: Message,
-}
-
-impl MessageSchedule {
-    pub fn new(schedule_pattern: SchedulePattern, message: Message) -> MessageSchedule {
-        MessageSchedule {
-            id: Uuid::new_v4(),
-            schedule_pattern: Some(schedule_pattern),
-            message,
-        }
-    }
-}
-
 impl Iterator for SchedulePattern {
     type Item = SchedulePattern;
 
@@ -83,17 +75,28 @@ impl Iterator for SchedulePattern {
     fn next(&mut self) -> Option<SchedulePattern> {
         match &self {
             SchedulePattern::Delayed(_) => None,
+
             SchedulePattern::Interval(period) => match period.repeat {
+                Repeat::Times(times) => match period.transmission_count >= times {
+                    true => None,
+                    false => Some(SchedulePattern::Interval(Interval {
+                        start: period.start,
+                        next: Some(
+                            period.start + period.interval * (period.transmission_count as i32 + 1),
+                        ),
+                        interval: period.interval,
+                        repeat: Repeat::Times(times),
+                        transmission_count: period.transmission_count + 1,
+                    })),
+                },
                 Repeat::Infinitely => Some(SchedulePattern::Interval(Interval {
-                    next: period.next + period.interval,
+                    start: period.start,
+                    next: Some(
+                        period.start + period.interval * (period.transmission_count as i32 + 1),
+                    ),
                     interval: period.interval,
                     repeat: Repeat::Infinitely,
-                })),
-                Repeat::Times(0) => None,
-                Repeat::Times(n) => Some(SchedulePattern::Interval(Interval {
-                    next: period.next + period.interval,
-                    interval: period.interval,
-                    repeat: Repeat::Times(n - 1),
+                    transmission_count: period.transmission_count + 1,
                 })),
             },
             SchedulePattern::Cron(cron_schedule) => match cron_schedule.repeat {
@@ -123,6 +126,28 @@ impl Iterator for SchedulePattern {
                     repeat: Repeat::Infinitely,
                 })),
             },
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Message {
+    Event(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MessageSchedule {
+    id: Uuid,
+    pub schedule_pattern: Option<SchedulePattern>,
+    pub message: Message,
+}
+
+impl MessageSchedule {
+    pub fn new(schedule_pattern: SchedulePattern, message: Message) -> MessageSchedule {
+        MessageSchedule {
+            id: Uuid::new_v4(),
+            schedule_pattern: Some(schedule_pattern),
+            message,
         }
     }
 }
@@ -249,7 +274,10 @@ impl MessageScheduler {
             .iter()
             .filter(|schedule| match &schedule.schedule_pattern {
                 Some(SchedulePattern::Delayed(datetime)) => datetime < &(self.now).now(),
-                Some(SchedulePattern::Interval(periodic)) => periodic.next < (self.now).now(),
+                Some(SchedulePattern::Interval(interval)) => match interval.next {
+                    None => false,
+                    Some(next) => next < (self.now).now(),
+                },
                 Some(SchedulePattern::Cron(cron_schedule)) => match cron_schedule.next {
                     None => false,
                     Some(next) => next < (self.now).now(),
@@ -340,19 +368,19 @@ mod tests {
         let test_cases = vec![
             vec![],
             vec![MessageSchedule::new(
-                SchedulePattern::Interval(Interval {
-                    next: timestamp_now + bit_later,
-                    repeat: Repeat::Times(repetitions),
-                    interval: interval,
-                }),
+                SchedulePattern::Interval(Interval::new(
+                    timestamp_now + bit_later,
+                    interval,
+                    Repeat::Times(repetitions),
+                )),
                 Message::Event("ArbitraryData".into()),
             )],
             vec![MessageSchedule::new(
-                SchedulePattern::Interval(Interval {
-                    next: DateTime::<Utc>::MAX_UTC,
-                    repeat: Repeat::Times(repetitions),
-                    interval: interval,
-                }),
+                SchedulePattern::Interval(Interval::new(
+                    DateTime::<Utc>::MAX_UTC,
+                    interval,
+                    Repeat::Times(repetitions),
+                )),
                 Message::Event("ArbitraryData".into()),
             )],
         ];
@@ -404,11 +432,11 @@ mod tests {
         let interval = chrono::Duration::milliseconds(100);
 
         let schedules_repeated_interval = vec![MessageSchedule::new(
-            SchedulePattern::Interval(Interval {
-                next: timestamp_now + chrono::Duration::milliseconds(10),
-                repeat: Repeat::Times(repetitions),
-                interval: interval,
-            }),
+            SchedulePattern::Interval(Interval::new(
+                timestamp_now + chrono::Duration::milliseconds(10),
+                interval,
+                Repeat::Times(repetitions),
+            )),
             Message::Event("ArbitraryData".into()),
         )];
 
@@ -463,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn test_infinite_periodic_interval() {
+    fn test_infinite_interval() {
         let mut transmitter = MockTransmitter::new();
         let mut repository = MockRepository::new();
         let mut metrics = MockMetrics::new();
@@ -472,38 +500,40 @@ mod tests {
         let interval = chrono::Duration::milliseconds(100);
 
         let original_schedule = MessageSchedule::new(
-            SchedulePattern::Interval(Interval {
-                next: just_now,
-                repeat: Repeat::Infinitely,
-                interval,
-            }),
+            SchedulePattern::Interval(Interval::new(just_now, interval, Repeat::Infinitely)),
             Message::Event("ArbitraryData".into()),
         );
 
         let expected_schedule_0 = MessageSchedule {
             id: original_schedule.id,
             schedule_pattern: Some(SchedulePattern::Interval(Interval {
-                next: just_now + interval,
-                repeat: Repeat::Infinitely,
+                start: just_now,
+                next: Some(just_now + interval),
                 interval,
+                repeat: Repeat::Infinitely,
+                transmission_count: 1,
             })),
             message: original_schedule.message.clone(),
         };
         let expected_schedule_1 = MessageSchedule {
             id: original_schedule.id,
             schedule_pattern: Some(SchedulePattern::Interval(Interval {
-                next: just_now + interval + interval,
-                repeat: Repeat::Infinitely,
+                start: just_now,
+                next: Some(just_now + interval + interval),
                 interval,
+                repeat: Repeat::Infinitely,
+                transmission_count: 2,
             })),
             message: original_schedule.message.clone(),
         };
         let expected_schedule_2 = MessageSchedule {
             id: original_schedule.id,
             schedule_pattern: Some(SchedulePattern::Interval(Interval {
-                next: just_now + interval + interval + interval,
-                repeat: Repeat::Infinitely,
+                start: just_now,
+                next: Some(just_now + interval + interval + interval),
                 interval,
+                repeat: Repeat::Infinitely,
+                transmission_count: 3,
             })),
             message: original_schedule.message.clone(),
         };
@@ -548,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    fn test_finite_periodic_interval() {
+    fn test_finite_interval() {
         let mut transmitter = MockTransmitter::new();
         let mut repository = MockRepository::new();
         let mut metrics = MockMetrics::new();
@@ -558,29 +588,33 @@ mod tests {
         let interval = chrono::Duration::milliseconds(100);
 
         let original_schedule = MessageSchedule::new(
-            SchedulePattern::Interval(Interval {
-                next: just_now,
-                repeat: Repeat::Times(repetitions),
+            SchedulePattern::Interval(Interval::new(
+                just_now,
                 interval,
-            }),
+                Repeat::Times(repetitions),
+            )),
             Message::Event("ArbitraryData".into()),
         );
 
         let expected_schedule_second_to_last = MessageSchedule {
             id: original_schedule.id,
             schedule_pattern: Some(SchedulePattern::Interval(Interval {
-                next: just_now + interval,
-                repeat: Repeat::Times(repetitions - 1),
+                start: just_now,
+                next: Some(just_now + interval),
                 interval,
+                repeat: Repeat::Times(repetitions),
+                transmission_count: 1,
             })),
             message: original_schedule.message.clone(),
         };
         let expected_schedule_last = MessageSchedule {
             id: original_schedule.id,
             schedule_pattern: Some(SchedulePattern::Interval(Interval {
-                next: just_now + interval + interval,
-                repeat: Repeat::Times(repetitions - 2),
+                start: just_now,
+                next: Some(just_now + interval + interval),
                 interval,
+                repeat: Repeat::Times(repetitions),
+                transmission_count: 2,
             })),
             message: original_schedule.message.clone(),
         };
@@ -696,35 +730,35 @@ mod tests {
         )
     }
 
-    fn new_schedule_periodic_infinitely() -> MessageSchedule {
+    fn new_schedule_interval_infinitely() -> MessageSchedule {
         MessageSchedule::new(
-            SchedulePattern::Interval(Interval {
-                next: Utc::now() - chrono::Duration::milliseconds(10),
-                repeat: Repeat::Infinitely,
-                interval: chrono::Duration::milliseconds(100),
-            }),
+            SchedulePattern::Interval(Interval::new(
+                Utc::now() - chrono::Duration::milliseconds(10),
+                chrono::Duration::milliseconds(100),
+                Repeat::Infinitely,
+            )),
             Message::Event("ArbitraryData".into()),
         )
     }
 
-    fn new_schedule_periodic_n() -> MessageSchedule {
+    fn new_schedule_interval_n() -> MessageSchedule {
         MessageSchedule::new(
-            SchedulePattern::Interval(Interval {
-                next: Utc::now() - chrono::Duration::milliseconds(10),
-                repeat: Repeat::Times(5),
-                interval: chrono::Duration::milliseconds(100),
-            }),
+            SchedulePattern::Interval(Interval::new(
+                Utc::now() - chrono::Duration::milliseconds(10),
+                chrono::Duration::milliseconds(100),
+                Repeat::Times(5),
+            )),
             Message::Event("ArbitraryData".into()),
         )
     }
 
-    fn new_schedule_periodic_last() -> MessageSchedule {
+    fn new_schedule_interval_last() -> MessageSchedule {
         MessageSchedule::new(
-            SchedulePattern::Interval(Interval {
-                next: Utc::now() - chrono::Duration::milliseconds(10),
-                repeat: Repeat::Times(0),
-                interval: chrono::Duration::milliseconds(100),
-            }),
+            SchedulePattern::Interval(Interval::new(
+                Utc::now() - chrono::Duration::milliseconds(10),
+                chrono::Duration::milliseconds(100),
+                Repeat::Times(0),
+            )),
             Message::Event("ArbitraryData".into()),
         )
     }
@@ -792,7 +826,7 @@ mod tests {
             // Periodic interval schedules.
             TransmissionTestCase {
                 name: "periodic_success".into(),
-                schedule: new_schedule_periodic_infinitely(),
+                schedule: new_schedule_interval_infinitely(),
                 transmission: Box::new(move |_| Ok(())),
                 schedule_state_transition: ScheduleStateTransition::Save(
                     Box::new(move |_| Ok(())),
@@ -802,7 +836,7 @@ mod tests {
             },
             TransmissionTestCase {
                 name: "periodic_fail_and_reschedule".into(),
-                schedule: new_schedule_periodic_infinitely(),
+                schedule: new_schedule_interval_infinitely(),
                 transmission: Box::new(move |_| Err("Let's hope this gets rescheduled.".into())),
                 schedule_state_transition: ScheduleStateTransition::Reschedule(
                     Box::new(move |_| Ok(())),
@@ -812,7 +846,7 @@ mod tests {
             },
             TransmissionTestCase {
                 name: "periodic_transmit_but_fail_state_transition".into(),
-                schedule: new_schedule_periodic_infinitely(),
+                schedule: new_schedule_interval_infinitely(),
                 transmission: Box::new(move |_| Ok(())),
                 schedule_state_transition: ScheduleStateTransition::Save(
                     Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
@@ -822,7 +856,7 @@ mod tests {
             },
             TransmissionTestCase {
                 name: "periodic_transmit_fail_and_reschedule_fail".into(),
-                schedule: new_schedule_periodic_infinitely(),
+                schedule: new_schedule_interval_infinitely(),
                 transmission: Box::new(move |_| Err("Even the reschedule hereafter fails".into())),
                 schedule_state_transition: ScheduleStateTransition::Reschedule(
                     Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
@@ -833,7 +867,7 @@ mod tests {
             // Repeat finitely
             TransmissionTestCase {
                 name: "repeat_n_times_success".into(),
-                schedule: new_schedule_periodic_n(),
+                schedule: new_schedule_interval_n(),
                 transmission: Box::new(move |_| Ok(())),
                 schedule_state_transition: ScheduleStateTransition::Save(
                     Box::new(move |_| Ok(())),
@@ -843,7 +877,7 @@ mod tests {
             },
             TransmissionTestCase {
                 name: "repeat_n_times_fail_and_reschedule".into(),
-                schedule: new_schedule_periodic_n(),
+                schedule: new_schedule_interval_n(),
                 transmission: Box::new(move |_| Err("Let's hope this gets rescheduled.".into())),
                 schedule_state_transition: ScheduleStateTransition::Reschedule(
                     Box::new(move |_| Ok(())),
@@ -853,7 +887,7 @@ mod tests {
             },
             TransmissionTestCase {
                 name: "repeat_n_times_fail_state_transition".into(),
-                schedule: new_schedule_periodic_n(),
+                schedule: new_schedule_interval_n(),
                 transmission: Box::new(move |_| Ok(())),
                 schedule_state_transition: ScheduleStateTransition::Save(
                     Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
@@ -863,7 +897,7 @@ mod tests {
             },
             TransmissionTestCase {
                 name: "repeat_n_times_reschedule_fail".into(),
-                schedule: new_schedule_periodic_n(),
+                schedule: new_schedule_interval_n(),
                 transmission: Box::new(move |_| Err("Even the reschedule hereafter fails".into())),
                 schedule_state_transition: ScheduleStateTransition::Reschedule(
                     Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
@@ -874,7 +908,7 @@ mod tests {
             // Repeat for the last time.
             TransmissionTestCase {
                 name: "repeat_last_success".into(),
-                schedule: new_schedule_periodic_last(),
+                schedule: new_schedule_interval_last(),
                 transmission: Box::new(move |_| Ok(())),
                 schedule_state_transition: ScheduleStateTransition::Save(
                     Box::new(move |_| Ok(())),
@@ -884,7 +918,7 @@ mod tests {
             },
             TransmissionTestCase {
                 name: "repeat_last_fail_reschedule".into(),
-                schedule: new_schedule_periodic_last(),
+                schedule: new_schedule_interval_last(),
                 transmission: Box::new(move |_| Err("Let's hope this gets rescheduled.".into())),
                 schedule_state_transition: ScheduleStateTransition::Reschedule(
                     Box::new(move |_| Ok(())),
@@ -894,7 +928,7 @@ mod tests {
             },
             TransmissionTestCase {
                 name: "repeat_last_fail_state_transition".into(),
-                schedule: new_schedule_periodic_last(),
+                schedule: new_schedule_interval_last(),
                 transmission: Box::new(move |_| Ok(())),
                 schedule_state_transition: ScheduleStateTransition::Save(
                     Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
@@ -904,7 +938,7 @@ mod tests {
             },
             TransmissionTestCase {
                 name: "repeat_last_reschedule_fail".into(),
-                schedule: new_schedule_periodic_last(),
+                schedule: new_schedule_interval_last(),
                 transmission: Box::new(move |_| Err("Even the reschedule hereafter fails".into())),
                 schedule_state_transition: ScheduleStateTransition::Reschedule(
                     Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
