@@ -24,8 +24,6 @@ pub struct Interval {
     pub first_transmission: DateTime<Utc>,
     pub interval: chrono::Duration,
     pub repeat: Repeat,
-    pub next: Option<DateTime<Utc>>,
-    pub transmission_count: u32,
 }
 
 impl Interval {
@@ -38,8 +36,20 @@ impl Interval {
             first_transmission,
             interval,
             repeat,
-            next: Some(first_transmission),
-            transmission_count: 0,
+        }
+    }
+
+    fn next(&self, transmission_count: u32) -> Option<DateTime<Utc>> {
+        match self.repeat {
+            Repeat::Times(repetitions) => match transmission_count >= repetitions {
+                true => None,
+                false => {
+                    Some(self.first_transmission + self.interval * (transmission_count as i32))
+                }
+            },
+            Repeat::Infinitely => {
+                Some(self.first_transmission + self.interval * (transmission_count as i32))
+            }
         }
     }
 }
@@ -49,8 +59,6 @@ pub struct Cron {
     pub first_transmission_after: DateTime<Utc>,
     pub schedule: Schedule,
     pub repeat: Repeat,
-    pub next: Option<DateTime<Utc>>,
-    pub transmission_count: u32,
 }
 
 impl Cron {
@@ -61,10 +69,24 @@ impl Cron {
     ) -> Cron {
         Cron {
             first_transmission_after,
-            next: schedule.after(&first_transmission_after).next(),
             schedule,
             repeat,
-            transmission_count: 0,
+        }
+    }
+
+    fn next(&self, transmission_count: u32) -> Option<DateTime<Utc>> {
+        match self.repeat {
+            Repeat::Times(repetitions) => match transmission_count >= repetitions {
+                true => None,
+                false => self
+                    .schedule
+                    .after(&self.first_transmission_after)
+                    .nth((transmission_count) as usize),
+            },
+            Repeat::Infinitely => self
+                .schedule
+                .after(&self.first_transmission_after)
+                .nth((transmission_count) as usize),
         }
     }
 }
@@ -72,16 +94,17 @@ impl Cron {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Delayed {
     transmit_at: DateTime<Utc>,
-    next: Option<DateTime<Utc>>,
-    transmission_count: u32,
 }
 
 impl Delayed {
     pub fn new(transmit_at: DateTime<Utc>) -> Delayed {
-        Delayed {
-            transmit_at,
-            next: Some(transmit_at),
-            transmission_count: 0,
+        Delayed { transmit_at }
+    }
+
+    fn next(&self, transmission_count: u32) -> Option<DateTime<Utc>> {
+        match transmission_count {
+            0 => Some(self.transmit_at),
+            _ => None,
         }
     }
 }
@@ -97,82 +120,11 @@ impl SchedulePattern {
     // next is called after transmission of the message, to transition the SchedulePattern to
     // contain an easily comparable timestamp, such that it is easily retrieved by filtering
     // on the next datetime. If None, the message schedule is completed.
-    fn next(&self) -> SchedulePattern {
+    fn next(&self, transmission_count: u32) -> Option<DateTime<Utc>> {
         match &self {
-            SchedulePattern::Delayed(delayed) => SchedulePattern::Delayed(Delayed {
-                transmit_at: delayed.transmit_at,
-                next: None,
-                transmission_count: 1,
-            }),
-
-            SchedulePattern::Interval(interval) => match interval.repeat {
-                Repeat::Times(repetitions) => {
-                    let transmission_count = interval.transmission_count + 1;
-
-                    match transmission_count >= repetitions {
-                        true => SchedulePattern::Interval(Interval {
-                            first_transmission: interval.first_transmission,
-                            interval: interval.interval,
-                            repeat: interval.repeat.clone(),
-                            next: None,
-                            transmission_count,
-                        }),
-                        false => SchedulePattern::Interval(Interval {
-                            first_transmission: interval.first_transmission,
-                            interval: interval.interval,
-                            repeat: interval.repeat.clone(),
-                            next: Some(
-                                interval.first_transmission
-                                    + interval.interval * (transmission_count as i32),
-                            ),
-                            transmission_count,
-                        }),
-                    }
-                }
-                Repeat::Infinitely => SchedulePattern::Interval(Interval {
-                    first_transmission: interval.first_transmission,
-                    interval: interval.interval,
-                    repeat: Repeat::Infinitely,
-                    next: Some(
-                        interval.first_transmission
-                            + interval.interval * (interval.transmission_count as i32 + 1),
-                    ),
-                    transmission_count: interval.transmission_count + 1,
-                }),
-            },
-            SchedulePattern::Cron(cron_schedule) => match cron_schedule.repeat {
-                Repeat::Times(repetitions) => {
-                    match cron_schedule.transmission_count < repetitions {
-                        false => SchedulePattern::Cron(Cron {
-                            first_transmission_after: cron_schedule.first_transmission_after,
-                            schedule: cron_schedule.schedule.clone(),
-                            repeat: cron_schedule.repeat.clone(),
-                            next: None,
-                            transmission_count: cron_schedule.transmission_count,
-                        }),
-                        true => SchedulePattern::Cron(Cron {
-                            first_transmission_after: cron_schedule.first_transmission_after,
-                            schedule: cron_schedule.schedule.clone(),
-                            repeat: cron_schedule.repeat.clone(),
-                            next: cron_schedule
-                                .schedule
-                                .after(&cron_schedule.first_transmission_after)
-                                .nth((cron_schedule.transmission_count + 1) as usize),
-                            transmission_count: cron_schedule.transmission_count + 1,
-                        }),
-                    }
-                }
-                Repeat::Infinitely => SchedulePattern::Cron(Cron {
-                    first_transmission_after: cron_schedule.first_transmission_after,
-                    schedule: cron_schedule.schedule.clone(),
-                    repeat: Repeat::Infinitely,
-                    next: cron_schedule
-                        .schedule
-                        .after(&cron_schedule.first_transmission_after)
-                        .nth((cron_schedule.transmission_count + 1) as usize),
-                    transmission_count: cron_schedule.transmission_count + 1,
-                }),
-            },
+            SchedulePattern::Delayed(delayed) => delayed.next(transmission_count),
+            SchedulePattern::Interval(interval) => interval.next(transmission_count),
+            SchedulePattern::Cron(cron_schedule) => cron_schedule.next(transmission_count),
         }
     }
 }
@@ -186,15 +138,27 @@ pub enum Message {
 pub struct MessageSchedule {
     id: Uuid,
     pub schedule_pattern: SchedulePattern,
+    pub next: Option<DateTime<Utc>>,
+    pub transmission_count: u32,
     pub message: Message,
 }
 
 impl MessageSchedule {
     pub fn new(schedule_pattern: SchedulePattern, message: Message) -> MessageSchedule {
+        let next = match schedule_pattern {
+            SchedulePattern::Delayed(ref delayed) => Some(delayed.transmit_at),
+            SchedulePattern::Interval(ref interval) => Some(interval.first_transmission),
+            SchedulePattern::Cron(ref cron_schedule) => cron_schedule
+                .schedule
+                .after(&cron_schedule.first_transmission_after)
+                .next(),
+        };
         MessageSchedule {
             id: Uuid::new_v4(),
             schedule_pattern,
             message,
+            next,
+            transmission_count: 0,
         }
     }
 }
@@ -319,20 +283,12 @@ impl MessageScheduler {
 
         schedules
             .iter()
-            .filter(|schedule| match &schedule.schedule_pattern {
-                SchedulePattern::Delayed(delayed) => match delayed.next {
+            .filter(
+                |schedule| match schedule.schedule_pattern.next(schedule.transmission_count) {
                     None => false,
-                    Some(next) => next < (self.now).now(),
+                    Some(next_datetime) => next_datetime <= self.now.now(),
                 },
-                SchedulePattern::Interval(interval) => match interval.next {
-                    None => false,
-                    Some(next) => next < (self.now).now(),
-                },
-                SchedulePattern::Cron(cron_schedule) => match cron_schedule.next {
-                    None => false,
-                    Some(next) => next < (self.now).now(),
-                },
-            })
+            )
             .map(|schedule| match self.transmit(schedule) {
                 Ok(_) => {
                     self.metrics.count(MetricEvent::Transmitted(true));
@@ -354,12 +310,15 @@ impl MessageScheduler {
 
         match transmission_result {
             Ok(_) => {
-                let schedule_pattern_clone = schedule.schedule_pattern.clone();
-                let next_schedule_pattern = schedule_pattern_clone.next();
+                let new_transmission_count = schedule.transmission_count + 1;
+                let next_datetime = schedule.schedule_pattern.next(new_transmission_count);
+
                 let next_schedule = MessageSchedule {
                     id: schedule.id,
-                    schedule_pattern: next_schedule_pattern,
+                    schedule_pattern: schedule.schedule_pattern.clone(),
                     message: schedule.message.clone(),
+                    next: next_datetime,
+                    transmission_count: new_transmission_count,
                 };
 
                 let state_transition_result = self.repository.save(&next_schedule);
@@ -472,19 +431,23 @@ mod tests {
         let timestamp_now =
             DateTime::from_timestamp(1431648000, 0).expect("should be valid timestamp");
         assert_eq!(timestamp_now.to_string(), "2015-05-15 00:00:00 UTC");
-        let timestamp_some_time_later = timestamp_now.clone() + chrono::Duration::milliseconds(15);
+        let timestamp_some_time_later = timestamp_now.clone() + chrono::Duration::seconds(15);
 
         let repetitions = 5;
-        let interval = chrono::Duration::milliseconds(100);
+        let interval = chrono::Duration::seconds(30);
 
         let schedules_repeated_interval = vec![MessageSchedule::new(
             SchedulePattern::Interval(Interval::new(
-                timestamp_now + chrono::Duration::milliseconds(10),
+                timestamp_now + chrono::Duration::seconds(10),
                 interval,
                 Repeat::Times(repetitions),
             )),
             Message::Event("ArbitraryData".into()),
         )];
+        assert_eq!(
+            schedules_repeated_interval[0].next.unwrap().to_string(),
+            "2015-05-15 00:00:10 UTC"
+        );
 
         let mut now = MockNow::new();
         now.expect_now().times(1).returning(move || timestamp_now);
@@ -498,6 +461,7 @@ mod tests {
             .times(2)
             .returning(move |batch_size| {
                 assert_eq!(batch_size, BATCH_SIZE);
+
                 Ok(schedules_repeated_interval.clone())
             });
         repository.expect_save().returning(|_| Ok(())).times(1);
@@ -554,33 +518,33 @@ mod tests {
             id: original_schedule.id,
             schedule_pattern: SchedulePattern::Interval(Interval {
                 first_transmission: just_now,
-                next: Some(just_now + interval),
                 interval,
                 repeat: Repeat::Infinitely,
-                transmission_count: 1,
             }),
+            next: Some(just_now + interval),
+            transmission_count: 1,
             message: original_schedule.message.clone(),
         };
         let expected_schedule_1 = MessageSchedule {
             id: original_schedule.id,
             schedule_pattern: SchedulePattern::Interval(Interval {
                 first_transmission: just_now,
-                next: Some(just_now + interval + interval),
                 interval,
                 repeat: Repeat::Infinitely,
-                transmission_count: 2,
             }),
+            next: Some(just_now + interval + interval),
+            transmission_count: 2,
             message: original_schedule.message.clone(),
         };
         let expected_schedule_2 = MessageSchedule {
             id: original_schedule.id,
             schedule_pattern: SchedulePattern::Interval(Interval {
                 first_transmission: just_now,
-                next: Some(just_now + interval + interval + interval),
                 interval,
                 repeat: Repeat::Infinitely,
-                transmission_count: 3,
             }),
+            next: Some(just_now + interval + interval + interval),
+            transmission_count: 3,
             message: original_schedule.message.clone(),
         };
 
@@ -633,46 +597,35 @@ mod tests {
         let just_now = Utc::now() - chrono::Duration::milliseconds(10);
         let interval = chrono::Duration::milliseconds(100);
 
+        let original_schedule_pattern = SchedulePattern::Interval(Interval::new(
+            just_now,
+            interval,
+            Repeat::Times(repetitions),
+        ));
         let original_schedule = MessageSchedule::new(
-            SchedulePattern::Interval(Interval::new(
-                just_now,
-                interval,
-                Repeat::Times(repetitions),
-            )),
+            original_schedule_pattern.clone(),
             Message::Event("ArbitraryData".into()),
         );
 
         let expected_schedule_second_to_last = MessageSchedule {
             id: original_schedule.id,
-            schedule_pattern: SchedulePattern::Interval(Interval {
-                first_transmission: just_now,
-                next: Some(just_now + interval),
-                interval,
-                repeat: Repeat::Times(repetitions),
-                transmission_count: 1,
-            }),
+            schedule_pattern: original_schedule_pattern.clone(),
+            next: Some(just_now + interval),
+            transmission_count: 1,
             message: original_schedule.message.clone(),
         };
         let expected_schedule_last = MessageSchedule {
             id: original_schedule.id,
-            schedule_pattern: SchedulePattern::Interval(Interval {
-                first_transmission: just_now,
-                next: Some(just_now + interval + interval),
-                interval,
-                repeat: Repeat::Times(repetitions),
-                transmission_count: 2,
-            }),
+            schedule_pattern: original_schedule_pattern.clone(),
+            next: Some(just_now + interval + interval),
+            transmission_count: 2,
             message: original_schedule.message.clone(),
         };
         let expected_schedule_done = MessageSchedule {
             id: original_schedule.id,
-            schedule_pattern: SchedulePattern::Interval(Interval {
-                first_transmission: just_now,
-                next: None,
-                interval,
-                repeat: Repeat::Times(repetitions),
-                transmission_count: 3,
-            }),
+            schedule_pattern: original_schedule_pattern,
+            next: None,
+            transmission_count: 3,
             message: original_schedule.message.clone(),
         };
 
@@ -1315,12 +1268,16 @@ mod tests {
             .returning(move || timestamp_first_poll_clone.clone());
 
         // Second poll: schedule is ready: so transmit.
-        let expected_cron_schedule_pattern = Cron {
-            first_transmission_after: timestamp_first_poll,
+        let expected_schedule = MessageSchedule {
+            id: schedule.id,
+            message: schedule.message,
+            schedule_pattern: SchedulePattern::Cron(Cron {
+                first_transmission_after: timestamp_first_poll,
+                repeat: Repeat::Times(5),
+                schedule: cron_schedule.clone(),
+            }),
             next: Some(Utc.with_ymd_and_hms(2015, 5, 15, 0, 1, 5).unwrap()),
-            repeat: Repeat::Times(5),
             transmission_count: 1,
-            schedule: cron_schedule.clone(),
         };
         repository
             .expect_poll_batch()
@@ -1346,12 +1303,8 @@ mod tests {
             .times(1)
             .in_sequence(&mut sequence)
             .returning(move |schedule| {
-                match &schedule.schedule_pattern {
-                    SchedulePattern::Cron(cron_message_schedule) => {
-                        assert_eq!(cron_message_schedule, &expected_cron_schedule_pattern);
-                    }
-                    _ => panic!("unexpected schedule pattern"),
-                }
+                assert_eq!(schedule, &expected_schedule);
+
                 Ok(())
             });
         metrics
