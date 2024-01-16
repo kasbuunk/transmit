@@ -2,216 +2,14 @@ use std::error::Error;
 use std::thread;
 use std::time;
 
-use chrono::prelude::*;
-use cron::Schedule;
 use log::{error, info};
-use uuid::Uuid;
-
 #[allow(unused_imports)]
-use mockall::{automock, mock, predicate::*};
+use mockall::predicate::*;
+
+use crate::contract::{MetricEvent, Metrics, Now, Repository, Transmitter};
+use crate::model::{Message, MessageSchedule, SchedulePattern};
 
 static BATCH_SIZE: u32 = 100;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Repeat {
-    // Infinitely dictates the schedule repeats indefinitely.
-    Infinitely,
-    // Times contains the number of transmissions planned.
-    Times(u32),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Interval {
-    pub first_transmission: DateTime<Utc>,
-    pub interval: chrono::Duration,
-    pub repeat: Repeat,
-}
-
-impl Interval {
-    pub fn new(
-        first_transmission: DateTime<Utc>,
-        interval: chrono::Duration,
-        repeat: Repeat,
-    ) -> Interval {
-        Interval {
-            first_transmission,
-            interval,
-            repeat,
-        }
-    }
-
-    fn next(&self, transmission_count: u32) -> Option<DateTime<Utc>> {
-        match self.repeat {
-            Repeat::Times(repetitions) => match transmission_count >= repetitions {
-                true => None,
-                false => {
-                    Some(self.first_transmission + self.interval * (transmission_count as i32))
-                }
-            },
-            Repeat::Infinitely => {
-                Some(self.first_transmission + self.interval * (transmission_count as i32))
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Cron {
-    pub first_transmission_after: DateTime<Utc>,
-    pub schedule: Schedule,
-    pub repeat: Repeat,
-}
-
-impl Cron {
-    pub fn new(
-        first_transmission_after: DateTime<Utc>,
-        schedule: Schedule,
-        repeat: Repeat,
-    ) -> Cron {
-        Cron {
-            first_transmission_after,
-            schedule,
-            repeat,
-        }
-    }
-
-    fn next(&self, transmission_count: u32) -> Option<DateTime<Utc>> {
-        match self.repeat {
-            Repeat::Times(repetitions) => match transmission_count >= repetitions {
-                true => None,
-                false => self
-                    .schedule
-                    .after(&self.first_transmission_after)
-                    .nth((transmission_count) as usize),
-            },
-            Repeat::Infinitely => self
-                .schedule
-                .after(&self.first_transmission_after)
-                .nth((transmission_count) as usize),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Delayed {
-    transmit_at: DateTime<Utc>,
-}
-
-impl Delayed {
-    pub fn new(transmit_at: DateTime<Utc>) -> Delayed {
-        Delayed { transmit_at }
-    }
-
-    fn next(&self, transmission_count: u32) -> Option<DateTime<Utc>> {
-        match transmission_count {
-            0 => Some(self.transmit_at),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SchedulePattern {
-    Delayed(Delayed),
-    Cron(Cron),
-    Interval(Interval),
-}
-
-impl SchedulePattern {
-    // next is called after transmission of the message, to transition the SchedulePattern to
-    // contain an easily comparable timestamp, such that it is easily retrieved by filtering
-    // on the next datetime. If None, the message schedule is completed.
-    fn next(&self, transmission_count: u32) -> Option<DateTime<Utc>> {
-        match &self {
-            SchedulePattern::Delayed(delayed) => delayed.next(transmission_count),
-            SchedulePattern::Interval(interval) => interval.next(transmission_count),
-            SchedulePattern::Cron(cron_schedule) => cron_schedule.next(transmission_count),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Message {
-    Event(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MessageSchedule {
-    id: Uuid,
-    pub schedule_pattern: SchedulePattern,
-    pub next: Option<DateTime<Utc>>,
-    pub transmission_count: u32,
-    pub message: Message,
-}
-
-impl MessageSchedule {
-    pub fn new(schedule_pattern: SchedulePattern, message: Message) -> MessageSchedule {
-        let next = match schedule_pattern {
-            SchedulePattern::Delayed(ref delayed) => Some(delayed.transmit_at),
-            SchedulePattern::Interval(ref interval) => Some(interval.first_transmission),
-            SchedulePattern::Cron(ref cron_schedule) => cron_schedule
-                .schedule
-                .after(&cron_schedule.first_transmission_after)
-                .next(),
-        };
-        MessageSchedule {
-            id: Uuid::new_v4(),
-            schedule_pattern,
-            message,
-            next,
-            transmission_count: 0,
-        }
-    }
-}
-
-#[cfg_attr(test, automock)]
-pub trait Repository {
-    fn store_schedule(&self, schedule: MessageSchedule) -> Result<(), Box<dyn Error>>;
-    fn poll_batch(&self, batch_size: u32) -> Result<Vec<MessageSchedule>, Box<dyn Error>>;
-    fn save(&self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>>;
-    fn reschedule(&self, schedule_id: &Uuid) -> Result<(), Box<dyn Error>>;
-}
-
-#[cfg_attr(test, automock)]
-pub trait Transmitter {
-    fn transmit(&self, message: Message) -> Result<(), Box<dyn Error>>;
-}
-
-#[cfg_attr(test, automock)]
-pub trait Now {
-    fn now(&self) -> DateTime<Utc>;
-}
-
-impl<F> Now for F
-where
-    F: Fn() -> DateTime<Utc>,
-{
-    fn now(&self) -> DateTime<Utc> {
-        self()
-    }
-}
-
-pub struct UtcNow;
-
-impl Now for UtcNow {
-    fn now(&self) -> DateTime<Utc> {
-        Utc::now()
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum MetricEvent {
-    Scheduled(bool),
-    Polled(bool),
-    Transmitted(bool),
-    ScheduleStateSaved(bool),
-    Rescheduled(bool),
-}
-
-#[cfg_attr(test, automock)]
-pub trait Metrics {
-    fn count(&self, event: MetricEvent);
-}
 
 pub struct MessageScheduler {
     // repository keeps the program stateless, by providing a storage interface to store and
@@ -361,8 +159,15 @@ impl MessageScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mockall::Sequence;
+
     use std::str::FromStr;
+
+    use chrono::prelude::*;
+    use mockall::Sequence;
+    use uuid::Uuid;
+
+    use crate::contract::*;
+    use crate::model::*;
 
     #[test]
     fn test_poll_non_ready_schedule() {
