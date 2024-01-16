@@ -4,6 +4,7 @@ use std::time;
 
 use chrono::prelude::*;
 use cron::Schedule;
+use log::{error, info};
 use uuid::Uuid;
 
 #[allow(unused_imports)]
@@ -243,7 +244,7 @@ impl MessageScheduler {
         loop {
             match self.process_batch() {
                 Ok(_) => (),
-                Err(err) => println!("error: {:?}", err),
+                Err(err) => error!("error: {:?}", err),
             };
 
             thread::sleep(time::Duration::from_millis(100));
@@ -281,6 +282,8 @@ impl MessageScheduler {
             }
         };
 
+        info!("Polled {} schedules to transmit", schedules.len());
+
         schedules
             .iter()
             .filter(
@@ -300,13 +303,15 @@ impl MessageScheduler {
                 }
             })
             .filter(|result| result.is_err())
-            .for_each(|err| println!("{:?}", err));
+            .for_each(|err| error!("{:?}", err));
 
         Ok(())
     }
 
     fn transmit(&self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
         let transmission_result = self.transmitter.transmit(schedule.message.clone());
+
+        info!("Transmitted message from schedule with id: {}", schedule.id);
 
         match transmission_result {
             Ok(_) => {

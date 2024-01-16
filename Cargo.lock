@@ -181,6 +181,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "cron",
+ "log",
  "mockall",
  "uuid",
 ]
