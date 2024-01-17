@@ -26,7 +26,7 @@ impl Transmitter for NatsPublisher {
 
                 Ok(())
             }
-            _ => panic!("implement me"),
+            _ => Err("Unsupported message type".into()),
         }
     }
 }
@@ -99,5 +99,64 @@ mod test {
         .expect("timeout reached");
 
         handle.await.expect("could not join threads");
+    }
+
+    #[tokio::test]
+    // This is a sociable unit test, i.e. it integrates with nats, which is expected to run and be
+    // accessible.
+    //
+    // Run with `docker run -p 4222:4222 -ti nats:latest`.
+    async fn test_transmitter_wrong_subject() {
+        let port = 4222;
+        let address = format!("nats://localhost:{port}");
+        let client = async_nats::connect(address)
+            .await
+            .expect("Nats connection failed. Is nats running on port {port}?");
+
+        let subject_publish = "EVENTS.published".into();
+
+        let event = NatsEvent {
+            subject: subject_publish,
+            data: Bytes::from("structured bytes containing order information").into(),
+        };
+        let subject_clone = event.subject.clone();
+
+        let subscription_client = client.clone();
+        let mut subscriber = subscription_client
+            .subscribe(async_nats::Subject::from("WRONG.subject"))
+            .await
+            .expect("subscribing should succeed");
+        subscriber
+            .unsubscribe_after(1)
+            .await
+            .expect("unsubscribing should succeed");
+
+        let received_flag = Arc::new(Mutex::new(false));
+        let received_flag_clone = Arc::clone(&received_flag);
+
+        tokio::spawn(async move {
+            while let Some(message) = subscriber.next().await {
+                assert_eq!(message.subject, subject_clone);
+                *received_flag_clone.lock().expect("failed to lock") = true;
+            }
+        });
+
+        let transmitter = NatsPublisher::new(client);
+        transmitter
+            .transmit(Message::NatsEvent(event))
+            .await
+            .expect("transmission should succeed");
+
+        // Wait for the message to be received.
+        let timeout_duration = Duration::from_millis(5);
+        let timeout_reached = tokio::time::timeout(timeout_duration, async {
+            // Wait until the flag is set to true (message received)
+            while !*received_flag.lock().unwrap() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await;
+
+        assert!(timeout_reached.is_err());
     }
 }
