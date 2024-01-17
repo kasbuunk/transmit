@@ -1,5 +1,7 @@
 use std::error::Error;
 
+use async_trait::async_trait;
+
 use chrono::prelude::*;
 #[allow(unused_imports)]
 use mockall::{automock, mock, predicate::*};
@@ -20,8 +22,9 @@ pub trait Repository {
 }
 
 #[cfg_attr(test, automock)]
+#[async_trait]
 pub trait Transmitter {
-    fn transmit(&self, message: Message) -> Result<(), Box<dyn Error>>;
+    async fn transmit(&self, message: Message) -> Result<(), Box<dyn Error>>;
 }
 
 #[cfg_attr(test, automock)]

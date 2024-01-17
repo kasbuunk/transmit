@@ -1,5 +1,6 @@
 use std::error::Error;
 
+use bytes::Bytes;
 use chrono::prelude::*;
 use cron::Schedule;
 use uuid::Uuid;
@@ -123,8 +124,15 @@ impl SchedulePattern {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NatsEvent {
+    pub subject: async_nats::Subject,
+    pub data: Bytes,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Message {
-    Event(String),
+    Dummy(String),
+    NatsEvent(NatsEvent),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

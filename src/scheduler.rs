@@ -38,9 +38,9 @@ impl MessageScheduler {
         }
     }
 
-    pub fn run(&mut self) -> ! {
+    pub async fn run(&mut self) -> ! {
         loop {
-            match self.process_batch() {
+            match self.process_batch().await {
                 Ok(_) => (),
                 Err(err) => error!("error: {:?}", err),
             };
@@ -68,7 +68,7 @@ impl MessageScheduler {
     // error. Or, errors should have a separate thing. We don't want any errors to meddle with
     // things that may errored as a one-off problem; likewise we need errors to be transparent by
     // metrics and logging.
-    fn process_batch(&mut self) -> Result<(), Box<dyn Error>> {
+    async fn process_batch(&mut self) -> Result<(), Box<dyn Error>> {
         let now = self.now.now();
 
         let schedules = match self.repository.poll_batch(now, BATCH_SIZE) {
@@ -84,32 +84,34 @@ impl MessageScheduler {
 
         info!("Polled {} schedules to transmit", schedules.len());
 
-        schedules
-            .iter()
+        let relevant_schedules: Vec<MessageSchedule> = schedules
+            .clone()
+            .into_iter()
             .filter(
                 |schedule| match schedule.schedule_pattern.next(schedule.transmission_count) {
                     None => false,
                     Some(next_datetime) => next_datetime <= now,
                 },
             )
-            .map(|schedule| match self.transmit(schedule) {
+            .collect();
+
+        for schedule in relevant_schedules {
+            match self.transmit(&schedule).await {
                 Ok(_) => {
                     self.metrics.count(MetricEvent::Transmitted(true));
-                    Ok(())
                 }
                 Err(err) => {
                     self.metrics.count(MetricEvent::Transmitted(false));
-                    Err(err)
+                    error!("failed to transmit: {:?}", err)
                 }
-            })
-            .filter(|result| result.is_err())
-            .for_each(|err| error!("{:?}", err));
+            }
+        }
 
         Ok(())
     }
 
-    fn transmit(&mut self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
-        let transmission_result = self.transmitter.transmit(schedule.message.clone());
+    async fn transmit(&mut self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
+        let transmission_result = self.transmitter.transmit(schedule.message.clone()).await;
 
         info!("Transmitted message from schedule with id: {}", schedule.id);
 
@@ -169,8 +171,8 @@ mod tests {
     use crate::contract::*;
     use crate::model::*;
 
-    #[test]
-    fn test_poll_non_ready_schedule() {
+    #[tokio::test]
+    async fn test_poll_non_ready_schedule() {
         let timestamp_now =
             DateTime::from_timestamp(1431648000, 0).expect("should be valid timestamp");
         assert_eq!(timestamp_now.to_string(), "2015-05-15 00:00:00 UTC");
@@ -188,7 +190,7 @@ mod tests {
                     interval,
                     Repeat::Times(repetitions),
                 )),
-                Message::Event("ArbitraryData".into()),
+                Message::Dummy("ArbitraryData".into()),
             )],
             vec![MessageSchedule::new(
                 SchedulePattern::Interval(Interval::new(
@@ -196,7 +198,7 @@ mod tests {
                     interval,
                     Repeat::Times(repetitions),
                 )),
-                Message::Event("ArbitraryData".into()),
+                Message::Dummy("ArbitraryData".into()),
             )],
         ];
 
@@ -231,13 +233,13 @@ mod tests {
                 Box::new(metrics),
             );
 
-            let result = scheduler.process_batch();
+            let result = scheduler.process_batch().await;
             assert!(result.is_ok());
         }
     }
 
-    #[test]
-    fn test_poll_before_and_after_next() {
+    #[tokio::test]
+    async fn test_poll_before_and_after_next() {
         let timestamp_now =
             DateTime::from_timestamp(1431648000, 0).expect("should be valid timestamp");
         assert_eq!(timestamp_now.to_string(), "2015-05-15 00:00:00 UTC");
@@ -252,7 +254,7 @@ mod tests {
                 interval,
                 Repeat::Times(repetitions),
             )),
-            Message::Event("ArbitraryData".into()),
+            Message::Dummy("ArbitraryData".into()),
         )];
         assert_eq!(
             schedules_repeated_interval[0].next.unwrap().to_string(),
@@ -300,14 +302,14 @@ mod tests {
             Box::new(metrics),
         );
 
-        let result = scheduler.process_batch();
+        let result = scheduler.process_batch().await;
         assert!(result.is_ok());
-        let result = scheduler.process_batch();
+        let result = scheduler.process_batch().await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_infinite_interval() {
+    #[tokio::test]
+    async fn test_infinite_interval() {
         let mut transmitter = MockTransmitter::new();
         let mut repository = MockRepository::new();
         let mut metrics = MockMetrics::new();
@@ -317,7 +319,7 @@ mod tests {
 
         let original_schedule = MessageSchedule::new(
             SchedulePattern::Interval(Interval::new(just_now, interval, Repeat::Infinitely)),
-            Message::Event("ArbitraryData".into()),
+            Message::Dummy("ArbitraryData".into()),
         );
 
         let expected_schedule_0 = MessageSchedule {
@@ -385,16 +387,16 @@ mod tests {
             Box::new(metrics),
         );
 
-        let result = scheduler.transmit(&original_schedule);
+        let result = scheduler.transmit(&original_schedule).await;
         assert!(result.is_ok());
-        let result = scheduler.transmit(&expected_schedule_0);
+        let result = scheduler.transmit(&expected_schedule_0).await;
         assert!(result.is_ok());
-        let result = scheduler.transmit(&expected_schedule_1);
+        let result = scheduler.transmit(&expected_schedule_1).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_finite_interval() {
+    #[tokio::test]
+    async fn test_finite_interval() {
         let mut transmitter = MockTransmitter::new();
         let mut repository = MockRepository::new();
         let mut metrics = MockMetrics::new();
@@ -410,7 +412,7 @@ mod tests {
         ));
         let original_schedule = MessageSchedule::new(
             original_schedule_pattern.clone(),
-            Message::Event("ArbitraryData".into()),
+            Message::Dummy("ArbitraryData".into()),
         );
 
         let expected_schedule_second_to_last = MessageSchedule {
@@ -466,11 +468,11 @@ mod tests {
             Box::new(metrics),
         );
 
-        let result = scheduler.transmit(&original_schedule);
+        let result = scheduler.transmit(&original_schedule).await;
         assert!(result.is_ok());
-        let result = scheduler.transmit(&expected_schedule_second_to_last);
+        let result = scheduler.transmit(&expected_schedule_second_to_last).await;
         assert!(result.is_ok());
-        let result = scheduler.transmit(&expected_schedule_last);
+        let result = scheduler.transmit(&expected_schedule_last).await;
         assert!(result.is_ok());
     }
 
@@ -500,7 +502,7 @@ mod tests {
         let now = Utc::now();
         let pattern = SchedulePattern::Delayed(Delayed::new(now));
 
-        let result = scheduler.schedule(pattern, Message::Event("DataBytes".into()));
+        let result = scheduler.schedule(pattern, Message::Dummy("DataBytes".into()));
         assert!(result.is_ok());
     }
 
@@ -530,7 +532,7 @@ mod tests {
         let now = Utc::now();
         let pattern = SchedulePattern::Delayed(Delayed::new(now));
 
-        let result = scheduler.schedule(pattern, Message::Event("DataBytes".into()));
+        let result = scheduler.schedule(pattern, Message::Dummy("DataBytes".into()));
         assert!(result.is_err());
     }
 
@@ -539,7 +541,7 @@ mod tests {
             SchedulePattern::Delayed(Delayed::new(
                 Utc::now() - chrono::Duration::milliseconds(10),
             )),
-            Message::Event("ArbitraryData".into()),
+            Message::Dummy("ArbitraryData".into()),
         )
     }
 
@@ -550,7 +552,7 @@ mod tests {
                 chrono::Duration::milliseconds(100),
                 Repeat::Infinitely,
             )),
-            Message::Event("ArbitraryData".into()),
+            Message::Dummy("ArbitraryData".into()),
         )
     }
 
@@ -561,7 +563,7 @@ mod tests {
                 chrono::Duration::milliseconds(100),
                 Repeat::Times(5),
             )),
-            Message::Event("ArbitraryData".into()),
+            Message::Dummy("ArbitraryData".into()),
         )
     }
 
@@ -572,7 +574,7 @@ mod tests {
                 chrono::Duration::milliseconds(100),
                 Repeat::Times(0),
             )),
-            Message::Event("ArbitraryData".into()),
+            Message::Dummy("ArbitraryData".into()),
         )
     }
 
@@ -592,8 +594,8 @@ mod tests {
         success: bool,
     }
 
-    #[test]
-    fn test_transmission_and_appropriate_state_transition() {
+    #[tokio::test]
+    async fn test_transmission_and_appropriate_state_transition() {
         let test_cases = vec![
             // Delayed message schedules.
             TransmissionTestCase {
@@ -797,7 +799,7 @@ mod tests {
                 Box::new(metrics),
             );
 
-            let result = scheduler.transmit(&test_case.schedule);
+            let result = scheduler.transmit(&test_case.schedule).await;
             assert_eq!(
                 result.is_ok(),
                 test_case.success,
@@ -807,8 +809,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_poll_datetimes_schedules_success() {
+    #[tokio::test]
+    async fn test_poll_datetimes_schedules_success() {
         let schedule_list = vec![new_schedule_delayed(), new_schedule_delayed()];
         let amount_schedules = schedule_list.len();
         let schedule_list_clone = schedule_list.clone();
@@ -865,19 +867,19 @@ mod tests {
             Box::new(metrics),
         );
 
-        let result = scheduler.process_batch();
+        let result = scheduler.process_batch().await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_poll_transmit_fail() {
+    #[tokio::test]
+    async fn test_poll_transmit_fail() {
         let now = Utc::now();
         let message_data = "This is an arbitrary message";
         let ten_milliseconds = chrono::Duration::milliseconds(10);
 
         let schedules = vec![MessageSchedule::new(
             SchedulePattern::Delayed(Delayed::new(now - ten_milliseconds)),
-            Message::Event(message_data.into()),
+            Message::Dummy(message_data.into()),
         )];
 
         let mut repository = MockRepository::new();
@@ -920,13 +922,13 @@ mod tests {
             Box::new(metrics),
         );
 
-        let result = scheduler.process_batch();
+        let result = scheduler.process_batch().await;
         assert!(result.is_ok());
     }
 
-    #[test]
+    #[tokio::test]
     // The first message will succeed, the second fails to transmit.
-    fn test_poll_datetimes_schedules_fail_transmit() {
+    async fn test_poll_datetimes_schedules_fail_transmit() {
         let now = Utc::now();
         let ten_milliseconds = chrono::Duration::milliseconds(10);
 
@@ -938,12 +940,12 @@ mod tests {
             MessageSchedule::new(
                 // Ready to process.
                 SchedulePattern::Delayed(Delayed::new(now - ten_milliseconds)),
-                Message::Event(message_data_success.into()),
+                Message::Dummy(message_data_success.into()),
             ),
             MessageSchedule::new(
                 // Ready to process.
                 SchedulePattern::Delayed(Delayed::new(now - ten_milliseconds)),
-                Message::Event(message_data_failure.into()),
+                Message::Dummy(message_data_failure.into()),
             ),
         ];
         let amount_schedules = schedule_list.len();
@@ -964,8 +966,8 @@ mod tests {
             .expect_transmit()
             .times(amount_schedules)
             .returning(move |message| match message {
-                Message::Event(data) if &data == message_data_success => Ok(()),
-                Message::Event(data) if &data == message_data_failure => {
+                Message::Dummy(data) if &data == message_data_success => Ok(()),
+                Message::Dummy(data) if &data == message_data_failure => {
                     Err("Second message fails to transmit".into())
                 }
                 _ => panic!("Unexpected transmission"),
@@ -1024,12 +1026,12 @@ mod tests {
             Box::new(metrics),
         );
 
-        let result = scheduler.process_batch();
+        let result = scheduler.process_batch().await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_cron() {
+    #[tokio::test]
+    async fn test_cron() {
         // Friday 15 May 2015;
         let timestamp_first_poll = Utc.with_ymd_and_hms(2015, 5, 15, 0, 0, 0).unwrap();
         assert_eq!(timestamp_first_poll.to_string(), "2015-05-15 00:00:00 UTC");
@@ -1046,7 +1048,7 @@ mod tests {
                 cron_schedule.clone(),
                 Repeat::Times(5),
             )),
-            Message::Event("ArbitraryData".into()),
+            Message::Dummy("ArbitraryData".into()),
         );
 
         let mut sequence = Sequence::new();
@@ -1131,10 +1133,10 @@ mod tests {
         );
 
         // First poll.
-        let result = scheduler.process_batch();
+        let result = scheduler.process_batch().await;
         assert!(result.is_ok());
         // Second poll.
-        let result = scheduler.process_batch();
+        let result = scheduler.process_batch().await;
         assert!(result.is_ok());
     }
 }
