@@ -2,7 +2,7 @@ use std::error::Error;
 use std::thread;
 use std::time;
 
-use log::{error, info};
+use log::{error, info, warn};
 #[allow(unused_imports)]
 use mockall::predicate::*;
 
@@ -38,7 +38,7 @@ impl MessageScheduler {
         }
     }
 
-    pub fn run(&self) -> ! {
+    pub fn run(&mut self) -> ! {
         loop {
             match self.process_batch() {
                 Ok(_) => (),
@@ -49,9 +49,9 @@ impl MessageScheduler {
         }
     }
 
-    pub fn schedule(&self, when: SchedulePattern, what: Message) -> Result<(), Box<dyn Error>> {
+    pub fn schedule(&mut self, when: SchedulePattern, what: Message) -> Result<(), Box<dyn Error>> {
         let schedule = MessageSchedule::new(when, what);
-        match self.repository.store_schedule(schedule) {
+        match self.repository.store_schedule(&schedule) {
             Ok(_) => {
                 self.metrics.count(MetricEvent::Scheduled(true));
                 Ok(())
@@ -68,8 +68,10 @@ impl MessageScheduler {
     // error. Or, errors should have a separate thing. We don't want any errors to meddle with
     // things that may errored as a one-off problem; likewise we need errors to be transparent by
     // metrics and logging.
-    fn process_batch(&self) -> Result<(), Box<dyn Error>> {
-        let schedules = match self.repository.poll_batch(BATCH_SIZE) {
+    fn process_batch(&mut self) -> Result<(), Box<dyn Error>> {
+        let now = self.now.now();
+
+        let schedules = match self.repository.poll_batch(now, BATCH_SIZE) {
             Ok(schedules) => {
                 self.metrics.count(MetricEvent::Polled(true));
                 schedules
@@ -87,7 +89,7 @@ impl MessageScheduler {
             .filter(
                 |schedule| match schedule.schedule_pattern.next(schedule.transmission_count) {
                     None => false,
-                    Some(next_datetime) => next_datetime <= self.now.now(),
+                    Some(next_datetime) => next_datetime <= now,
                 },
             )
             .map(|schedule| match self.transmit(schedule) {
@@ -106,25 +108,23 @@ impl MessageScheduler {
         Ok(())
     }
 
-    fn transmit(&self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
+    fn transmit(&mut self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
         let transmission_result = self.transmitter.transmit(schedule.message.clone());
 
         info!("Transmitted message from schedule with id: {}", schedule.id);
 
         match transmission_result {
             Ok(_) => {
-                let new_transmission_count = schedule.transmission_count + 1;
-                let next_datetime = schedule.schedule_pattern.next(new_transmission_count);
-
-                let next_schedule = MessageSchedule {
-                    id: schedule.id,
-                    schedule_pattern: schedule.schedule_pattern.clone(),
-                    message: schedule.message.clone(),
-                    next: next_datetime,
-                    transmission_count: new_transmission_count,
+                let transmitted_message = schedule.transmitted();
+                let transmitted_message = match transmitted_message {
+                    Ok(message) => message,
+                    Err(err) => {
+                        warn!("Transmitted message that ought not to have been sent: {err}");
+                        return Err(err);
+                    }
                 };
 
-                let state_transition_result = self.repository.save(&next_schedule);
+                let state_transition_result = self.repository.save(&transmitted_message);
                 match state_transition_result {
                     Ok(_) => {
                         self.metrics.count(MetricEvent::ScheduleStateSaved(true));
@@ -203,14 +203,14 @@ mod tests {
         for test_case_schedules in test_cases {
             let mut now = MockNow::new();
             now.expect_now()
-                .times(test_case_schedules.len())
+                .times(1)
                 .returning(move || timestamp_now_clone);
 
             let mut repository = MockRepository::new();
             repository
                 .expect_poll_batch()
                 .times(1)
-                .returning(move |batch_size| {
+                .returning(move |_, batch_size| {
                     assert_eq!(batch_size, BATCH_SIZE);
                     Ok(test_case_schedules.clone())
                 });
@@ -224,7 +224,7 @@ mod tests {
                 .returning(|_| ())
                 .times(1);
 
-            let scheduler = MessageScheduler::new(
+            let mut scheduler = MessageScheduler::new(
                 Box::new(repository),
                 Box::new(transmitter),
                 Box::new(now),
@@ -269,11 +269,7 @@ mod tests {
         repository
             .expect_poll_batch()
             .times(2)
-            .returning(move |batch_size| {
-                assert_eq!(batch_size, BATCH_SIZE);
-
-                Ok(schedules_repeated_interval.clone())
-            });
+            .returning(move |_, _| Ok(schedules_repeated_interval.clone()));
         repository.expect_save().returning(|_| Ok(())).times(1);
 
         let mut transmitter = MockTransmitter::new();
@@ -296,7 +292,7 @@ mod tests {
             .returning(|_| ())
             .times(1);
 
-        let scheduler = MessageScheduler::new(
+        let mut scheduler = MessageScheduler::new(
             Box::new(repository),
             Box::new(transmitter),
             Box::new(now), // First call to now will be too early for the given time, the next will
@@ -382,7 +378,7 @@ mod tests {
             .returning(|_| ())
             .times(3);
 
-        let scheduler = MessageScheduler::new(
+        let mut scheduler = MessageScheduler::new(
             Box::new(repository),
             Box::new(transmitter),
             Box::new(Utc::now),
@@ -463,7 +459,7 @@ mod tests {
             .returning(|_| ())
             .times(3);
 
-        let scheduler = MessageScheduler::new(
+        let mut scheduler = MessageScheduler::new(
             Box::new(repository),
             Box::new(transmitter),
             Box::new(Utc::now),
@@ -494,7 +490,7 @@ mod tests {
             .returning(|_| ())
             .times(1);
 
-        let scheduler = MessageScheduler::new(
+        let mut scheduler = MessageScheduler::new(
             Box::new(repository),
             Box::new(transmitter),
             Box::new(Utc::now),
@@ -524,7 +520,7 @@ mod tests {
             .returning(|_| ())
             .times(1);
 
-        let scheduler = MessageScheduler::new(
+        let mut scheduler = MessageScheduler::new(
             Box::new(repository),
             Box::new(transmitter),
             Box::new(Utc::now),
@@ -794,7 +790,7 @@ mod tests {
                 }
             };
 
-            let scheduler = MessageScheduler::new(
+            let mut scheduler = MessageScheduler::new(
                 Box::new(repository),
                 Box::new(transmitter),
                 Box::new(Utc::now),
@@ -821,7 +817,7 @@ mod tests {
         repository
             .expect_poll_batch()
             .times(1)
-            .returning(move |batch_size| {
+            .returning(move |_, batch_size| {
                 assert_eq!(batch_size, BATCH_SIZE);
                 Ok(schedule_list_clone.clone())
             });
@@ -862,7 +858,7 @@ mod tests {
             .returning(|_| ())
             .times(amount_schedules);
 
-        let scheduler = MessageScheduler::new(
+        let mut scheduler = MessageScheduler::new(
             Box::new(repository),
             Box::new(publisher),
             Box::new(Utc::now),
@@ -888,7 +884,7 @@ mod tests {
         repository
             .expect_poll_batch()
             .times(1)
-            .returning(move |_batch_size| Ok(schedules.clone()));
+            .returning(move |_, _| Ok(schedules.clone()));
         repository
             .expect_reschedule()
             .times(1)
@@ -917,7 +913,7 @@ mod tests {
             .returning(|_| ())
             .times(1);
 
-        let scheduler = MessageScheduler::new(
+        let mut scheduler = MessageScheduler::new(
             Box::new(repository),
             Box::new(transmitter),
             Box::new(Utc::now),
@@ -958,7 +954,7 @@ mod tests {
         repository
             .expect_poll_batch()
             .times(1)
-            .returning(move |batch_size| {
+            .returning(move |_, batch_size| {
                 assert_eq!(batch_size, BATCH_SIZE);
                 Ok(schedule_list_clone.clone())
             });
@@ -1021,7 +1017,7 @@ mod tests {
             .returning(|_| ())
             .times(1);
 
-        let scheduler = MessageScheduler::new(
+        let mut scheduler = MessageScheduler::new(
             Box::new(repository),
             Box::new(transmitter),
             Box::new(Utc::now),
@@ -1067,7 +1063,7 @@ mod tests {
             .expect_poll_batch()
             .times(1)
             .in_sequence(&mut sequence)
-            .returning(move |_| Ok(vec![schedule_first_poll.clone()]));
+            .returning(move |_, _| Ok(vec![schedule_first_poll.clone()]));
         metrics
             .expect_count()
             .with(eq(MetricEvent::Polled(true)))
@@ -1093,7 +1089,7 @@ mod tests {
             .expect_poll_batch()
             .times(1)
             .in_sequence(&mut sequence)
-            .returning(move |_| Ok(vec![schedule_second_poll.clone()]));
+            .returning(move |_, _| Ok(vec![schedule_second_poll.clone()]));
         metrics
             .expect_count()
             .with(eq(MetricEvent::Polled(true)))
@@ -1101,7 +1097,6 @@ mod tests {
             .returning(|_| ());
         now.expect_now()
             .times(1)
-            .in_sequence(&mut sequence)
             .returning(move || timestamp_first_poll_clone + chrono::Duration::seconds(10));
         transmitter
             .expect_transmit()
@@ -1128,7 +1123,7 @@ mod tests {
             .returning(|_| ())
             .times(1);
 
-        let scheduler = MessageScheduler::new(
+        let mut scheduler = MessageScheduler::new(
             Box::new(repository),
             Box::new(transmitter),
             Box::new(now),

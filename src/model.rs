@@ -1,3 +1,5 @@
+use std::error::Error;
+
 use chrono::prelude::*;
 use cron::Schedule;
 use uuid::Uuid;
@@ -151,5 +153,25 @@ impl MessageSchedule {
             next,
             transmission_count: 0,
         }
+    }
+
+    // transmitted transitions the MessageSchedule to the next state, appropriate when transmitted.
+    //
+    // Returns an error if the current next field is None.
+    pub fn transmitted(&self) -> Result<MessageSchedule, Box<dyn Error>> {
+        if self.next.is_none() {
+            return Err("The message was not in a state to be transmitted, because the next datetime was None.".into());
+        }
+
+        let new_transmission_count = self.transmission_count + 1;
+        let new_next = self.schedule_pattern.next(new_transmission_count);
+
+        Ok(MessageSchedule {
+            id: self.id,
+            schedule_pattern: self.schedule_pattern.clone(),
+            message: self.message.clone(),
+            next: new_next,
+            transmission_count: new_transmission_count,
+        })
     }
 }
