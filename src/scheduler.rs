@@ -190,7 +190,10 @@ mod tests {
                     interval,
                     Repeat::Times(repetitions),
                 )),
-                Message::Dummy("ArbitraryData".into()),
+                Message::NatsEvent(NatsEvent::new(
+                    "SUBJECT.arbitrary".into(),
+                    "arbitrary payload".into(),
+                )),
             )],
             vec![MessageSchedule::new(
                 SchedulePattern::Interval(Interval::new(
@@ -198,7 +201,10 @@ mod tests {
                     interval,
                     Repeat::Times(repetitions),
                 )),
-                Message::Dummy("ArbitraryData".into()),
+                Message::NatsEvent(NatsEvent::new(
+                    "SUBJECT.arbitrary".into(),
+                    "arbitrary payload".into(),
+                )),
             )],
         ];
 
@@ -254,7 +260,10 @@ mod tests {
                 interval,
                 Repeat::Times(repetitions),
             )),
-            Message::Dummy("ArbitraryData".into()),
+            Message::NatsEvent(NatsEvent::new(
+                "SUBJECT.arbitrary".into(),
+                "arbitrary payload".into(),
+            )),
         )];
         assert_eq!(
             schedules_repeated_interval[0].next.unwrap().to_string(),
@@ -319,7 +328,10 @@ mod tests {
 
         let original_schedule = MessageSchedule::new(
             SchedulePattern::Interval(Interval::new(just_now, interval, Repeat::Infinitely)),
-            Message::Dummy("ArbitraryData".into()),
+            Message::NatsEvent(NatsEvent::new(
+                "SUBJECT.arbitrary".into(),
+                "arbitrary payload".into(),
+            )),
         );
 
         let expected_schedule_0 = MessageSchedule {
@@ -412,7 +424,10 @@ mod tests {
         ));
         let original_schedule = MessageSchedule::new(
             original_schedule_pattern.clone(),
-            Message::Dummy("ArbitraryData".into()),
+            Message::NatsEvent(NatsEvent::new(
+                "SUBJECT.arbitrary".into(),
+                "arbitrary payload".into(),
+            )),
         );
 
         let expected_schedule_second_to_last = MessageSchedule {
@@ -502,7 +517,7 @@ mod tests {
         let now = Utc::now();
         let pattern = SchedulePattern::Delayed(Delayed::new(now));
 
-        let result = scheduler.schedule(pattern, Message::Dummy("DataBytes".into()));
+        let result = scheduler.schedule(pattern, arbitrary_message());
         assert!(result.is_ok());
     }
 
@@ -532,8 +547,15 @@ mod tests {
         let now = Utc::now();
         let pattern = SchedulePattern::Delayed(Delayed::new(now));
 
-        let result = scheduler.schedule(pattern, Message::Dummy("DataBytes".into()));
+        let result = scheduler.schedule(pattern, arbitrary_message());
         assert!(result.is_err());
+    }
+
+    fn arbitrary_message() -> Message {
+        Message::NatsEvent(NatsEvent::new(
+            "SUBJECT.arbitrary".into(),
+            "arbitrary payload".into(),
+        ))
     }
 
     fn new_schedule_delayed() -> MessageSchedule {
@@ -541,7 +563,10 @@ mod tests {
             SchedulePattern::Delayed(Delayed::new(
                 Utc::now() - chrono::Duration::milliseconds(10),
             )),
-            Message::Dummy("ArbitraryData".into()),
+            Message::NatsEvent(NatsEvent::new(
+                "SUBJECT.arbitrary".into(),
+                "arbitrary payload".into(),
+            )),
         )
     }
 
@@ -552,7 +577,10 @@ mod tests {
                 chrono::Duration::milliseconds(100),
                 Repeat::Infinitely,
             )),
-            Message::Dummy("ArbitraryData".into()),
+            Message::NatsEvent(NatsEvent::new(
+                "SUBJECT.arbitrary".into(),
+                "arbitrary payload".into(),
+            )),
         )
     }
 
@@ -563,7 +591,10 @@ mod tests {
                 chrono::Duration::milliseconds(100),
                 Repeat::Times(5),
             )),
-            Message::Dummy("ArbitraryData".into()),
+            Message::NatsEvent(NatsEvent::new(
+                "SUBJECT.arbitrary".into(),
+                "arbitrary payload".into(),
+            )),
         )
     }
 
@@ -574,7 +605,10 @@ mod tests {
                 chrono::Duration::milliseconds(100),
                 Repeat::Times(0),
             )),
-            Message::Dummy("ArbitraryData".into()),
+            Message::NatsEvent(NatsEvent::new(
+                "SUBJECT.arbitrary".into(),
+                "arbitrary payload".into(),
+            )),
         )
     }
 
@@ -874,12 +908,11 @@ mod tests {
     #[tokio::test]
     async fn test_poll_transmit_fail() {
         let now = Utc::now();
-        let message_data = "This is an arbitrary message";
         let ten_milliseconds = chrono::Duration::milliseconds(10);
 
         let schedules = vec![MessageSchedule::new(
             SchedulePattern::Delayed(Delayed::new(now - ten_milliseconds)),
-            Message::Dummy(message_data.into()),
+            arbitrary_message(),
         )];
 
         let mut repository = MockRepository::new();
@@ -932,20 +965,26 @@ mod tests {
         let now = Utc::now();
         let ten_milliseconds = chrono::Duration::milliseconds(10);
 
-        let message_data_success = "This message will transmit";
-        let message_data_failure = "This message will fail to transmit";
+        let message_subject_success = "This message will transmit";
+        let message_subject_failure = "This message will fail to transmit";
         let index_message_failure = 1;
 
         let schedule_list = vec![
             MessageSchedule::new(
                 // Ready to process.
                 SchedulePattern::Delayed(Delayed::new(now - ten_milliseconds)),
-                Message::Dummy(message_data_success.into()),
+                Message::NatsEvent(NatsEvent::new(
+                    message_subject_success.into(),
+                    "random_payload".into(),
+                )),
             ),
             MessageSchedule::new(
                 // Ready to process.
                 SchedulePattern::Delayed(Delayed::new(now - ten_milliseconds)),
-                Message::Dummy(message_data_failure.into()),
+                Message::NatsEvent(NatsEvent::new(
+                    message_subject_failure.into(),
+                    "random_payload".into(),
+                )),
             ),
         ];
         let amount_schedules = schedule_list.len();
@@ -966,8 +1005,10 @@ mod tests {
             .expect_transmit()
             .times(amount_schedules)
             .returning(move |message| match message {
-                Message::Dummy(data) if &data == message_data_success => Ok(()),
-                Message::Dummy(data) if &data == message_data_failure => {
+                Message::NatsEvent(data) if data.subject == message_subject_success.into() => {
+                    Ok(())
+                }
+                Message::NatsEvent(data) if data.subject == message_subject_failure.into() => {
                     Err("Second message fails to transmit".into())
                 }
                 _ => panic!("Unexpected transmission"),
@@ -1048,7 +1089,10 @@ mod tests {
                 cron_schedule.clone(),
                 Repeat::Times(5),
             )),
-            Message::Dummy("ArbitraryData".into()),
+            Message::NatsEvent(NatsEvent::new(
+                "SUBJECT.arbitrary".into(),
+                "arbitrary payload".into(),
+            )),
         );
 
         let mut sequence = Sequence::new();

@@ -69,11 +69,17 @@ mod tests {
         let schedules = vec![
             MessageSchedule::new(
                 SchedulePattern::Delayed(Delayed::new(past)),
-                Message::Dummy("ArbitraryData".into()),
+                Message::NatsEvent(NatsEvent::new(
+                    "ARBITRARY.subject".into(),
+                    "arbitrary payload".into(),
+                )),
             ),
             MessageSchedule::new(
                 SchedulePattern::Delayed(Delayed::new(future)),
-                Message::Dummy("ArbitraryData".into()),
+                Message::NatsEvent(NatsEvent::new(
+                    "ARBITRARY.subject".into(),
+                    "arbitrary payload".into(),
+                )),
             ),
         ];
         let expected_polled_schedules: Vec<MessageSchedule> = vec![MessageSchedule {

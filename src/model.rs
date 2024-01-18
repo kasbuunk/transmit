@@ -126,12 +126,20 @@ impl SchedulePattern {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NatsEvent {
     pub subject: async_nats::Subject,
-    pub data: Bytes,
+    pub payload: Bytes,
+}
+
+impl NatsEvent {
+    pub fn new(subject: String, payload: Bytes) -> NatsEvent {
+        NatsEvent {
+            subject: subject.into(),
+            payload,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Message {
-    Dummy(String),
     NatsEvent(NatsEvent),
 }
 

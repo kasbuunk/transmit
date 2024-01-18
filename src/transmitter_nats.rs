@@ -21,12 +21,11 @@ impl Transmitter for NatsPublisher {
         match event {
             Message::NatsEvent(nats_event) => {
                 self.client
-                    .publish(nats_event.subject, nats_event.data)
+                    .publish(nats_event.subject, nats_event.payload)
                     .await?;
 
                 Ok(())
             }
-            _ => Err("Unsupported message type".into()),
         }
     }
 }
@@ -57,7 +56,7 @@ mod test {
 
         let event = NatsEvent {
             subject,
-            data: Bytes::from("structured bytes containing order information").into(),
+            payload: Bytes::from("structured bytes containing order information").into(),
         };
         let subject_clone = event.subject.clone();
 
@@ -117,7 +116,7 @@ mod test {
 
         let event = NatsEvent {
             subject: subject_publish,
-            data: Bytes::from("structured bytes containing order information").into(),
+            payload: Bytes::from("structured bytes containing order information").into(),
         };
         let subject_clone = event.subject.clone();
 
