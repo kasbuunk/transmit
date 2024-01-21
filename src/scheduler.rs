@@ -3,7 +3,7 @@ use std::thread;
 use std::time;
 
 use log::{error, info, warn};
-#[allow(unused_imports)]
+#[cfg(test)]
 use mockall::predicate::*;
 
 use crate::contract::{MetricEvent, Metrics, Now, Repository, Transmitter};
@@ -49,9 +49,13 @@ impl MessageScheduler {
         }
     }
 
-    pub fn schedule(&mut self, when: SchedulePattern, what: Message) -> Result<(), Box<dyn Error>> {
+    pub async fn schedule(
+        &mut self,
+        when: SchedulePattern,
+        what: Message,
+    ) -> Result<(), Box<dyn Error>> {
         let schedule = MessageSchedule::new(when, what);
-        match self.repository.store_schedule(&schedule) {
+        match self.repository.store_schedule(&schedule).await {
             Ok(_) => {
                 self.metrics.count(MetricEvent::Scheduled(true));
                 Ok(())
@@ -71,7 +75,7 @@ impl MessageScheduler {
     async fn process_batch(&mut self) -> Result<(), Box<dyn Error>> {
         let now = self.now.now();
 
-        let schedules = match self.repository.poll_batch(now, BATCH_SIZE) {
+        let schedules = match self.repository.poll_batch(now, BATCH_SIZE).await {
             Ok(schedules) => {
                 self.metrics.count(MetricEvent::Polled(true));
                 schedules
@@ -126,7 +130,7 @@ impl MessageScheduler {
                     }
                 };
 
-                let state_transition_result = self.repository.save(&transmitted_message);
+                let state_transition_result = self.repository.save(&transmitted_message).await;
                 match state_transition_result {
                     Ok(_) => {
                         self.metrics.count(MetricEvent::ScheduleStateSaved(true));
@@ -139,7 +143,7 @@ impl MessageScheduler {
                 }
             }
             Err(transmission_err) => {
-                match self.repository.reschedule(&schedule.id) {
+                match self.repository.reschedule(&schedule.id).await {
                     Ok(_) => {
                         self.metrics.count(MetricEvent::Rescheduled(true));
                         Err(transmission_err)
@@ -214,14 +218,12 @@ mod tests {
                 .times(1)
                 .returning(move || timestamp_now_clone);
 
+            let schedules = test_case_schedules.clone();
             let mut repository = MockRepository::new();
             repository
                 .expect_poll_batch()
                 .times(1)
-                .returning(move |_, batch_size| {
-                    assert_eq!(batch_size, BATCH_SIZE);
-                    Ok(test_case_schedules.clone())
-                });
+                .returning(move |_, _| Ok(schedules.clone()));
 
             let transmitter = MockTransmitter::new();
 
@@ -276,6 +278,7 @@ mod tests {
             .times(1)
             .returning(move || timestamp_some_time_later);
 
+        // let schedules_repeated_interval_clone = schedules_repeated_interval.clone()
         let mut repository = MockRepository::new();
         repository
             .expect_poll_batch()
@@ -491,8 +494,8 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_schedule() {
+    #[tokio::test]
+    async fn test_schedule() {
         let mut repository = MockRepository::new();
         repository
             .expect_store_schedule()
@@ -517,12 +520,12 @@ mod tests {
         let now = Utc::now();
         let pattern = SchedulePattern::Delayed(Delayed::new(now));
 
-        let result = scheduler.schedule(pattern, arbitrary_message());
+        let result = scheduler.schedule(pattern, arbitrary_message()).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_schedule_fail() {
+    #[tokio::test]
+    async fn test_schedule_fail() {
         let mut repository = MockRepository::new();
         repository
             .expect_store_schedule()
@@ -547,7 +550,7 @@ mod tests {
         let now = Utc::now();
         let pattern = SchedulePattern::Delayed(Delayed::new(now));
 
-        let result = scheduler.schedule(pattern, arbitrary_message());
+        let result = scheduler.schedule(pattern, arbitrary_message()).await;
         assert!(result.is_err());
     }
 

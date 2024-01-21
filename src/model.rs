@@ -1,11 +1,12 @@
 use std::error::Error;
+use std::str::FromStr;
 
 use bytes::Bytes;
 use chrono::prelude::*;
-use cron::Schedule;
+use serde::{ser::SerializeStruct, Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum Repeat {
     // Infinitely dictates the schedule repeats indefinitely.
     Infinitely,
@@ -13,9 +14,11 @@ pub enum Repeat {
     Times(u32),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[serde_with::serde_as]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Interval {
     pub first_transmission: DateTime<Utc>,
+    #[serde_as(as = "serde_with::DurationNanoSeconds<i64>")]
     pub interval: chrono::Duration,
     pub repeat: Repeat,
 }
@@ -48,17 +51,45 @@ impl Interval {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Cron {
     pub first_transmission_after: DateTime<Utc>,
-    pub schedule: Schedule,
+    #[serde(deserialize_with = "deserialize_custom_field")]
+    pub schedule: cron::Schedule,
     pub repeat: Repeat,
+}
+
+fn deserialize_custom_field<'de, D>(deserializer: D) -> Result<cron::Schedule, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let cron_str: String = Deserialize::deserialize(deserializer)?;
+
+    let cron_schedule = cron::Schedule::from_str(&cron_str).expect("FIXME");
+
+    Ok(cron_schedule)
+}
+
+impl Serialize for Cron {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("Cron", 3)?;
+        state.serialize_field("first_transmission_after", &self.first_transmission_after)?;
+
+        // Serialize the cron schedule as a string representation
+        state.serialize_field("schedule", &self.schedule.to_string())?;
+
+        state.serialize_field("repeat", &self.repeat)?;
+        state.end()
+    }
 }
 
 impl Cron {
     pub fn new(
         first_transmission_after: DateTime<Utc>,
-        schedule: Schedule,
+        schedule: cron::Schedule,
         repeat: Repeat,
     ) -> Cron {
         Cron {
@@ -85,7 +116,7 @@ impl Cron {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Delayed {
     transmit_at: DateTime<Utc>,
 }
@@ -103,7 +134,7 @@ impl Delayed {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum SchedulePattern {
     Delayed(Delayed),
     Cron(Cron),
@@ -123,7 +154,7 @@ impl SchedulePattern {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct NatsEvent {
     pub subject: async_nats::Subject,
     pub payload: Bytes,
@@ -138,12 +169,12 @@ impl NatsEvent {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum Message {
     NatsEvent(NatsEvent),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct MessageSchedule {
     pub id: Uuid,
     pub schedule_pattern: SchedulePattern,

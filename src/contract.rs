@@ -10,15 +10,16 @@ use uuid::Uuid;
 use crate::model::{Message, MessageSchedule};
 
 #[cfg_attr(test, automock)]
+#[async_trait]
 pub trait Repository {
-    fn store_schedule(&mut self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>>;
-    fn poll_batch(
+    async fn store_schedule(&mut self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>>;
+    async fn poll_batch(
         &self,
         before: DateTime<Utc>,
         batch_size: u32,
     ) -> Result<Vec<MessageSchedule>, Box<dyn Error>>;
-    fn save(&mut self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>>;
-    fn reschedule(&mut self, schedule_id: &Uuid) -> Result<(), Box<dyn Error>>;
+    async fn save(&mut self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>>;
+    async fn reschedule(&mut self, schedule_id: &Uuid) -> Result<(), Box<dyn Error>>;
 }
 
 #[cfg_attr(test, automock)]
