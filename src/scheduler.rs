@@ -1,12 +1,15 @@
 use std::error::Error;
+use std::sync::Arc;
 use std::thread;
 use std::time;
 
+use async_trait::async_trait;
 use log::{error, info, warn};
 #[cfg(test)]
 use mockall::predicate::*;
+use uuid::Uuid;
 
-use crate::contract::{MetricEvent, Metrics, Now, Repository, Transmitter};
+use crate::contract::{MetricEvent, Metrics, Now, Repository, Scheduler, Transmitter};
 use crate::model::{Message, MessageSchedule, SchedulePattern};
 
 static BATCH_SIZE: u32 = 100;
@@ -14,21 +17,38 @@ static BATCH_SIZE: u32 = 100;
 pub struct MessageScheduler {
     // repository keeps the program stateless, by providing a storage interface to store and
     // retrieve message schedules.
-    repository: Box<dyn Repository>,
+    repository: Arc<dyn Repository>,
     // transmitter sends the message according to the configured communication protocol.
-    transmitter: Box<dyn Transmitter>,
+    transmitter: Arc<dyn Transmitter>,
     // now is used to inject a mockable function to simulate the system's current datetime.
-    now: Box<dyn Now>,
+    now: Arc<dyn Now>,
     // metrics measures events of interest.
-    metrics: Box<dyn Metrics>,
+    metrics: Arc<dyn Metrics>,
+}
+
+#[async_trait]
+impl Scheduler for MessageScheduler {
+    async fn schedule(&self, when: SchedulePattern, what: Message) -> Result<Uuid, Box<dyn Error>> {
+        let schedule = MessageSchedule::new(when, what);
+        match self.repository.store_schedule(&schedule).await {
+            Ok(_) => {
+                self.metrics.count(MetricEvent::Scheduled(true));
+                Ok(schedule.id)
+            }
+            Err(err) => {
+                self.metrics.count(MetricEvent::Scheduled(false));
+                Err(err)
+            }
+        }
+    }
 }
 
 impl MessageScheduler {
     pub fn new(
-        repository: Box<dyn Repository>,
-        transmitter: Box<dyn Transmitter>,
-        now: Box<dyn Now>,
-        metrics: Box<dyn Metrics>,
+        repository: Arc<dyn Repository>,
+        transmitter: Arc<dyn Transmitter>,
+        now: Arc<dyn Now>,
+        metrics: Arc<dyn Metrics>,
     ) -> MessageScheduler {
         MessageScheduler {
             repository,
@@ -46,24 +66,6 @@ impl MessageScheduler {
             };
 
             thread::sleep(time::Duration::from_millis(100));
-        }
-    }
-
-    pub async fn schedule(
-        &mut self,
-        when: SchedulePattern,
-        what: Message,
-    ) -> Result<(), Box<dyn Error>> {
-        let schedule = MessageSchedule::new(when, what);
-        match self.repository.store_schedule(&schedule).await {
-            Ok(_) => {
-                self.metrics.count(MetricEvent::Scheduled(true));
-                Ok(())
-            }
-            Err(err) => {
-                self.metrics.count(MetricEvent::Scheduled(false));
-                Err(err)
-            }
         }
     }
 
@@ -235,10 +237,10 @@ mod tests {
                 .times(1);
 
             let mut scheduler = MessageScheduler::new(
-                Box::new(repository),
-                Box::new(transmitter),
-                Box::new(now),
-                Box::new(metrics),
+                Arc::new(repository),
+                Arc::new(transmitter),
+                Arc::new(now),
+                Arc::new(metrics),
             );
 
             let result = scheduler.process_batch().await;
@@ -307,11 +309,11 @@ mod tests {
             .times(1);
 
         let mut scheduler = MessageScheduler::new(
-            Box::new(repository),
-            Box::new(transmitter),
-            Box::new(now), // First call to now will be too early for the given time, the next will
+            Arc::new(repository),
+            Arc::new(transmitter),
+            Arc::new(now), // First call to now will be too early for the given time, the next will
             // be right when the schedule is met.
-            Box::new(metrics),
+            Arc::new(metrics),
         );
 
         let result = scheduler.process_batch().await;
@@ -396,10 +398,10 @@ mod tests {
             .times(3);
 
         let mut scheduler = MessageScheduler::new(
-            Box::new(repository),
-            Box::new(transmitter),
-            Box::new(Utc::now),
-            Box::new(metrics),
+            Arc::new(repository),
+            Arc::new(transmitter),
+            Arc::new(Utc::now),
+            Arc::new(metrics),
         );
 
         let result = scheduler.transmit(&original_schedule).await;
@@ -480,10 +482,10 @@ mod tests {
             .times(3);
 
         let mut scheduler = MessageScheduler::new(
-            Box::new(repository),
-            Box::new(transmitter),
-            Box::new(Utc::now),
-            Box::new(metrics),
+            Arc::new(repository),
+            Arc::new(transmitter),
+            Arc::new(Utc::now),
+            Arc::new(metrics),
         );
 
         let result = scheduler.transmit(&original_schedule).await;
@@ -510,11 +512,11 @@ mod tests {
             .returning(|_| ())
             .times(1);
 
-        let mut scheduler = MessageScheduler::new(
-            Box::new(repository),
-            Box::new(transmitter),
-            Box::new(Utc::now),
-            Box::new(metrics),
+        let scheduler = MessageScheduler::new(
+            Arc::new(repository),
+            Arc::new(transmitter),
+            Arc::new(Utc::now),
+            Arc::new(metrics),
         );
 
         let now = Utc::now();
@@ -540,11 +542,11 @@ mod tests {
             .returning(|_| ())
             .times(1);
 
-        let mut scheduler = MessageScheduler::new(
-            Box::new(repository),
-            Box::new(transmitter),
-            Box::new(Utc::now),
-            Box::new(metrics),
+        let scheduler = MessageScheduler::new(
+            Arc::new(repository),
+            Arc::new(transmitter),
+            Arc::new(Utc::now),
+            Arc::new(metrics),
         );
 
         let now = Utc::now();
@@ -830,10 +832,10 @@ mod tests {
             };
 
             let mut scheduler = MessageScheduler::new(
-                Box::new(repository),
-                Box::new(transmitter),
-                Box::new(Utc::now),
-                Box::new(metrics),
+                Arc::new(repository),
+                Arc::new(transmitter),
+                Arc::new(Utc::now),
+                Arc::new(metrics),
             );
 
             let result = scheduler.transmit(&test_case.schedule).await;
@@ -898,10 +900,10 @@ mod tests {
             .times(amount_schedules);
 
         let mut scheduler = MessageScheduler::new(
-            Box::new(repository),
-            Box::new(publisher),
-            Box::new(Utc::now),
-            Box::new(metrics),
+            Arc::new(repository),
+            Arc::new(publisher),
+            Arc::new(Utc::now),
+            Arc::new(metrics),
         );
 
         let result = scheduler.process_batch().await;
@@ -952,10 +954,10 @@ mod tests {
             .times(1);
 
         let mut scheduler = MessageScheduler::new(
-            Box::new(repository),
-            Box::new(transmitter),
-            Box::new(Utc::now),
-            Box::new(metrics),
+            Arc::new(repository),
+            Arc::new(transmitter),
+            Arc::new(Utc::now),
+            Arc::new(metrics),
         );
 
         let result = scheduler.process_batch().await;
@@ -1064,10 +1066,10 @@ mod tests {
             .times(1);
 
         let mut scheduler = MessageScheduler::new(
-            Box::new(repository),
-            Box::new(transmitter),
-            Box::new(Utc::now),
-            Box::new(metrics),
+            Arc::new(repository),
+            Arc::new(transmitter),
+            Arc::new(Utc::now),
+            Arc::new(metrics),
         );
 
         let result = scheduler.process_batch().await;
@@ -1173,10 +1175,10 @@ mod tests {
             .times(1);
 
         let mut scheduler = MessageScheduler::new(
-            Box::new(repository),
-            Box::new(transmitter),
-            Box::new(now),
-            Box::new(metrics),
+            Arc::new(repository),
+            Arc::new(transmitter),
+            Arc::new(now),
+            Arc::new(metrics),
         );
 
         // First poll.

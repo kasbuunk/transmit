@@ -43,7 +43,7 @@ impl RepositoryPostgres {
 
 #[async_trait]
 impl Repository for RepositoryPostgres {
-    async fn store_schedule(&mut self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
+    async fn store_schedule(&self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
         info!("storing schedule");
 
         let schedule_sql = MessageScheduleSql::from(schedule);
@@ -111,11 +111,11 @@ LIMIT $2;
         Ok(message_schedules)
     }
 
-    async fn save(&mut self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
+    async fn save(&self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
         self.store_schedule(schedule).await
     }
 
-    async fn reschedule(&mut self, schedule_id: &uuid::Uuid) -> Result<(), Box<dyn Error>> {
+    async fn reschedule(&self, schedule_id: &uuid::Uuid) -> Result<(), Box<dyn Error>> {
         let _ = sqlx::query!(
             "
 UPDATE message_schedule
@@ -201,7 +201,7 @@ mod tests {
             .await
             .expect("connecting to postgers failed. Is postgres running on port 5432?");
 
-        let mut repository = RepositoryPostgres::new(connection);
+        let repository = RepositoryPostgres::new(connection);
         repository
             .migrate()
             .await

@@ -1,19 +1,32 @@
 use std::error::Error;
+use std::sync::Arc;
+use std::sync::Mutex;
 
-use chrono::prelude::*;
 use async_trait::async_trait;
+use chrono::prelude::*;
 
 use crate::contract::Repository;
 use crate::model::*;
 
 pub struct RepositoryInMemory {
-    schedules: Vec<MessageSchedule>,
+    schedules: Arc<Mutex<Vec<MessageSchedule>>>,
+}
+
+impl RepositoryInMemory {
+    pub fn new() -> RepositoryInMemory {
+        RepositoryInMemory {
+            schedules: Arc::new(Mutex::new(vec![])),
+        }
+    }
 }
 
 #[async_trait]
 impl Repository for RepositoryInMemory {
-    async fn store_schedule(&mut self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
-        self.schedules.push(schedule.clone());
+    async fn store_schedule(&self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
+        self.schedules
+            .lock()
+            .expect("mutex is poisoned")
+            .push(schedule.clone());
 
         Ok(())
     }
@@ -26,17 +39,20 @@ impl Repository for RepositoryInMemory {
         Ok(self
             .schedules
             .clone()
-            .into_iter()
+            .lock()
+            .expect("mutex is poisoned")
+            .iter()
             .filter(|schedule| match schedule.next {
                 None => false,
                 Some(next) => next <= before,
             })
+            .map(|schedule_ref| schedule_ref.clone())
             .take(batch_size as usize)
             .collect())
     }
 
-    async fn save(&mut self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
-        for stored_schedule in self.schedules.iter_mut() {
+    async fn save(&self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
+        for stored_schedule in self.schedules.lock().unwrap().iter_mut() {
             if stored_schedule.id == schedule.id {
                 *stored_schedule = schedule.clone();
             }
@@ -46,7 +62,7 @@ impl Repository for RepositoryInMemory {
     }
 
     // reschedule is unnecessary for an in-memory implementation.
-    async fn reschedule(&mut self, _schedule_id: &uuid::Uuid) -> Result<(), Box<dyn Error>> {
+    async fn reschedule(&self, _schedule_id: &uuid::Uuid) -> Result<(), Box<dyn Error>> {
         Ok(())
     }
 }
@@ -55,11 +71,11 @@ impl Repository for RepositoryInMemory {
 mod tests {
     use super::*;
 
-    use tokio::time::{pause};
+    use tokio::time::pause;
 
     #[tokio::test]
     async fn test_store() {
-        let mut repository = RepositoryInMemory { schedules: vec![] };
+        let repository = RepositoryInMemory::new();
 
         let now = Utc::now();
         let past = now - chrono::Duration::milliseconds(100);
@@ -120,7 +136,7 @@ mod tests {
         }
 
         pause();
-        
+
         let polled_schedules_transmitted = repository
             .poll_batch(Utc::now(), 100)
             .await
