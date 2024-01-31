@@ -1092,6 +1092,7 @@ dependencies = [
  "log",
  "mockall",
  "prost",
+ "prost-types",
  "ron",
  "serde",
  "serde_json",

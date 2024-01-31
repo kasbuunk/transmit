@@ -1,0 +1,30 @@
+syntax = "proto3";
+package scheduler;
+
+import "google/protobuf/timestamp.proto";
+
+service Scheduler {
+	rpc ScheduleMessage (ScheduleMessageRequest) returns (ScheduleMessageResponse);
+}
+
+message NatsEvent {
+	string subject = 1;
+	bytes payload = 2;
+}
+
+message Delayed {
+	google.protobuf.Timestamp transmit_at = 1;
+}
+
+message ScheduleMessageRequest {
+	oneof schedule {
+		Delayed delayed = 1;
+	}
+	oneof Message {
+		NatsEvent nats_event = 2;
+	}
+}
+
+message ScheduleMessageResponse {
+	string schedule_entry_id = 1 ;
+}
