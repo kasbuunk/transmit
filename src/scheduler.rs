@@ -14,6 +14,7 @@ use crate::model::{Message, MessageSchedule, SchedulePattern};
 
 static BATCH_SIZE: u32 = 100;
 
+#[derive(Clone)]
 pub struct MessageScheduler {
     // repository keeps the program stateless, by providing a storage interface to store and
     // retrieve message schedules.
@@ -74,7 +75,7 @@ impl MessageScheduler {
     // error. Or, errors should have a separate thing. We don't want any errors to meddle with
     // things that may errored as a one-off problem; likewise we need errors to be transparent by
     // metrics and logging.
-    async fn process_batch(&mut self) -> Result<(), Box<dyn Error>> {
+    pub async fn process_batch(&mut self) -> Result<(), Box<dyn Error>> {
         let now = self.now.now();
 
         let schedules = match self.repository.poll_batch(now, BATCH_SIZE).await {
@@ -101,8 +102,8 @@ impl MessageScheduler {
             )
             .collect();
 
-        for schedule in relevant_schedules {
-            match self.transmit(&schedule).await {
+        for schedule in &relevant_schedules {
+            match self.transmit(schedule).await {
                 Ok(_) => {
                     self.metrics.count(MetricEvent::Transmitted(true));
                 }

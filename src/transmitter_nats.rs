@@ -5,6 +5,11 @@ use async_trait::async_trait;
 use crate::contract::Transmitter;
 use crate::model::Message;
 
+pub struct NatsConfig {
+    pub port: u16,
+    pub host: String,
+}
+
 pub struct NatsPublisher {
     client: async_nats::Client,
 }
@@ -46,11 +51,14 @@ mod test {
     //
     // Run with `docker run -p 4222:4222 -ti nats:latest`.
     async fn test_transmitter() {
-        let port = 4222;
-        let address = format!("nats://localhost:{port}");
+        let nats_config = NatsConfig {
+            port: 4222,
+            host: "localhost".to_string(),
+        };
+        let address = format!("nats://{}:{}", nats_config.host, nats_config.port);
         let client = async_nats::connect(address)
             .await
-            .expect("Nats connection failed. Is nats running on port {port}?");
+            .expect("Nats connection failed. Is nats running on address {address}?");
 
         let subject = "EVENTS.published".into();
 

@@ -25,16 +25,17 @@ pub struct Config {
 }
 
 pub struct GrpcServer {
+    config: Config,
     scheduler: Arc<dyn Scheduler + Send + Sync>,
 }
 
 impl GrpcServer {
-    pub fn new(scheduler: Arc<dyn Scheduler + Send + Sync>) -> GrpcServer {
-        GrpcServer { scheduler }
+    pub fn new(config: Config, scheduler: Arc<dyn Scheduler + Send + Sync>) -> GrpcServer {
+        GrpcServer { config, scheduler }
     }
 
-    pub async fn serve(self, port: u16) -> Result<(), Box<dyn Error>> {
-        let address = format!("127.0.0.1:{}", port).parse()?;
+    pub async fn serve(self) -> Result<(), Box<dyn Error>> {
+        let address = format!("127.0.0.1:{}", self.config.port).parse()?;
         let scheduler_server = SchedulerServer::new(self);
 
         info!("Start listening for incoming messages at {}.", address);
@@ -146,7 +147,8 @@ mod tests {
             .return_once(move |_, _| Ok(id_clone))
             .once();
 
-        let grpc_server = GrpcServer::new(Arc::new(scheduler));
+        let config = Config { port: 8081 };
+        let grpc_server = GrpcServer::new(config, Arc::new(scheduler));
 
         let request = ScheduleMessageRequest {
             schedule: Some(proto::schedule_message_request::Schedule::Delayed(
