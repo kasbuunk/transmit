@@ -17,6 +17,10 @@ mod tests {
     use crate::transmitter_nats;
 
     #[tokio::test]
+    // To monitor the transmitted messages, run nats via docker with:
+    // `docker run -p 4222:4222 -ti nats:latest`
+    // And observe live with:
+    // `nats sub -s "nats://localhost:4222" INTEGRATION.schedule_message`
     async fn schedule_message() {
         let timestamp_now = Utc::now();
         let ten_seconds_later = timestamp_now + Duration::seconds(10);
