@@ -35,7 +35,8 @@ impl GrpcServer {
     }
 
     pub async fn serve(self) -> Result<(), Box<dyn Error>> {
-        let address = format!("127.0.0.1:{}", self.config.port).parse()?;
+        let host = "127.0.0.1";
+        let address = format!("{}:{}", host, self.config.port).parse()?;
         let scheduler_server = SchedulerServer::new(self);
 
         info!("Start listening for incoming messages at {}.", address);

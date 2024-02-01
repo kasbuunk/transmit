@@ -1,6 +1,7 @@
 use std::error::Error;
 
 use async_trait::async_trait;
+use log::info;
 
 use crate::contract::Transmitter;
 use crate::model::Message;
@@ -26,8 +27,10 @@ impl Transmitter for NatsPublisher {
         match event {
             Message::NatsEvent(nats_event) => {
                 self.client
-                    .publish(nats_event.subject, nats_event.payload)
+                    .publish(nats_event.subject.clone(), nats_event.payload)
                     .await?;
+
+                info!("transmitted nats event to subject '{}'", nats_event.subject);
 
                 Ok(())
             }
@@ -96,14 +99,14 @@ mod test {
 
         // Wait for the message to be received.
         let timeout_duration = Duration::from_millis(5);
-        tokio::time::timeout(timeout_duration, async {
+        let timeout = tokio::time::timeout(timeout_duration, async {
             // Wait until the flag is set to true (message received)
             while !*received_flag.lock().unwrap() {
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
         })
-        .await
-        .expect("timeout reached");
+        .await;
+        timeout.expect("timeout reached");
 
         handle.await.expect("could not join threads");
     }

@@ -11,8 +11,6 @@ mod tests {
 
     use crate::contract::*;
     use crate::grpc;
-    use crate::grpc::proto::scheduler_server::Scheduler;
-    use crate::grpc::GrpcServer;
     use crate::postgres;
     use crate::repository_postgres;
     use crate::scheduler;
@@ -31,10 +29,6 @@ mod tests {
         now.expect_now()
             .once()
             .in_sequence(&mut sequence_now)
-            .returning(move || timestamp_now);
-        now.expect_now()
-            .once()
-            .in_sequence(&mut sequence_now)
             .returning(move || ten_seconds_later);
         now.expect_now()
             .once()
@@ -50,7 +44,7 @@ mod tests {
             .expect_count()
             .with(eq(MetricEvent::Polled(true)))
             .returning(|_| ())
-            .times(4);
+            .times(3);
         metrics
             .expect_count()
             .with(eq(MetricEvent::Scheduled(true)))
@@ -94,16 +88,13 @@ mod tests {
         let subject = "INTEGRATION.schedule_message";
 
         // Assert no transmission just yet.
-        let expect_transmission = false;
+        let flag_first_listening = Arc::new(Mutex::new(false));
         listen_for_transmission(
             &mut nats_connection.clone(),
             subject.into(),
-            expect_transmission,
+            flag_first_listening,
         )
         .await;
-
-        // Invoke poll-transmit procedure (first 'now'). Assert nothing happened yet.
-        scheduler.process_batch().await.expect("process should run");
 
         // Construct the grpc request, containing a schedule and message.
         let message_schedule_request =
@@ -112,22 +103,87 @@ mod tests {
 
         // Schedule a message with delayed(transmit_after_30s).
         let scheduler_arc = Arc::new(scheduler.clone());
-        let grpc_config = grpc::Config { port: 8081 };
+        let grpc_port = 50052;
+        let grpc_config = grpc::Config { port: grpc_port };
         let grpc_server = grpc::GrpcServer::new(grpc_config, scheduler_arc.clone());
-        // grpc_server.serve();
-        let response = grpc_server
+        tokio::task::spawn(async move {
+            grpc_server
+                .serve()
+                .await
+                .expect("failed to start grpc server");
+        });
+        // Allow time for the server to initialise.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let host = "localhost";
+        let address = format!("http://{}:{}", host, grpc_port);
+        // Connect to serer.
+        let mut grpc_client = grpc::proto::scheduler_client::SchedulerClient::connect(address)
+            .await
+            .expect("failed to connect to grpc server");
+        // Do the request.
+        let response = grpc_client
             .schedule_message(grpc_request)
             .await
             .expect("grpc server should handle request");
         let _ = uuid::Uuid::parse_str(&response.into_inner().schedule_entry_id)
             .expect("response should contain uuid");
 
-        // Invoke another poll-transmit (second: ten_seconds_later), again assert nothing happened.
+        // Invoke poll-transmit (second: ten_seconds_later), assert nothing happened.
+        let received_flag_after_10s = Arc::new(Mutex::new(false));
+        let _handle_cannot_be_joined = listen_for_transmission(
+            &mut nats_connection.clone(),
+            subject.into(),
+            received_flag_after_10s.clone(),
+        )
+        .await;
         scheduler.process_batch().await.expect("process should run");
+        let timeout_duration = std::time::Duration::from_millis(25);
+        let timeout_reached = tokio::time::timeout(timeout_duration, async {
+            // Wait until the flag is set to true (message received)
+            while !*received_flag_after_10s.lock().unwrap() {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await;
+        assert!(timeout_reached.is_err());
+
         // Invoke another poll-transmit (third: one_minute_later), assert the transmission.
+        let received_flag_after_60s = Arc::new(Mutex::new(false));
+        let _handle = listen_for_transmission(
+            &mut nats_connection.clone(),
+            subject.into(),
+            received_flag_after_60s.clone(),
+        )
+        .await;
         scheduler.process_batch().await.expect("process should run");
+        let timeout_duration = std::time::Duration::from_millis(25);
+        let timeout_reached = tokio::time::timeout(timeout_duration, async {
+            // Wait until the flag is set to true (message received)
+            while !*received_flag_after_60s.lock().unwrap() {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await;
+        timeout_reached.expect("transmission should set flag before timeout");
+
         // Invoke another poll-transmit (fourth: two_minutes_later), assert happened.
+        let received_flag_after_120s = Arc::new(Mutex::new(false));
+        let _handle_cannot_be_joined = listen_for_transmission(
+            &mut nats_connection.clone(),
+            subject.into(),
+            received_flag_after_120s.clone(),
+        )
+        .await;
         scheduler.process_batch().await.expect("process should run");
+        let timeout_duration = std::time::Duration::from_millis(25);
+        let timeout_reached = tokio::time::timeout(timeout_duration, async {
+            // Wait until the flag is set to true (message received)
+            while !*received_flag_after_120s.lock().unwrap() {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await;
+        assert!(timeout_reached.is_err());
     }
 
     fn new_message_schedule(
@@ -154,38 +210,20 @@ mod tests {
     async fn listen_for_transmission(
         nats_connection: &async_nats::Client,
         subject: String,
-        expect_transmission: bool,
-    ) {
-        let subscription_client = nats_connection;
-        let mut subscriber = subscription_client
+        received_flag: Arc<Mutex<bool>>,
+    ) -> tokio::task::JoinHandle<()> {
+        let mut subscriber = nats_connection
             .subscribe(async_nats::Subject::from(subject.clone()))
             .await
             .expect("subscribing should succeed");
 
-        let received_flag = Arc::new(Mutex::new(false));
-        let received_flag_clone = Arc::clone(&received_flag);
-
         let handle = tokio::spawn(async move {
             while let Some(message) = subscriber.next().await {
                 assert_eq!(message.subject, subject.clone().into());
-                *received_flag_clone.lock().expect("failed to lock") = true;
+                *received_flag.lock().expect("failed to lock") = true;
             }
         });
-        // Wait for the message to be received.
-        let timeout_duration = std::time::Duration::from_millis(5);
-        let timeout = tokio::time::timeout(timeout_duration, async {
-            // Wait until the flag is set to true (message received)
-            while !*received_flag.lock().unwrap() {
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            }
-        });
-        match expect_transmission {
-            true => {
-                assert!(timeout.await.is_ok());
-                handle.await.expect("could not join threads");
-            }
-            false => assert!(timeout.await.is_err()),
-        };
+        handle
     }
 
     async fn test_db() -> PgPool {
