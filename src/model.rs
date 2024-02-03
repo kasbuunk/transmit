@@ -222,3 +222,12 @@ impl MessageSchedule {
         })
     }
 }
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub enum MetricEvent {
+    Scheduled(bool),
+    Polled(bool),
+    Transmitted(bool),
+    ScheduleStateSaved(bool),
+    Rescheduled(bool),
+}

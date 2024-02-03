@@ -11,6 +11,7 @@ mod tests {
 
     use crate::contract::*;
     use crate::grpc;
+    use crate::model::MetricEvent;
     use crate::postgres;
     use crate::repository_postgres;
     use crate::scheduler;

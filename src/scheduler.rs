@@ -9,8 +9,8 @@ use log::{error, info, warn};
 use mockall::predicate::*;
 use uuid::Uuid;
 
-use crate::contract::{MetricEvent, Metrics, Now, Repository, Scheduler, Transmitter};
-use crate::model::{Message, MessageSchedule, SchedulePattern};
+use crate::contract::{Metrics, Now, Repository, Scheduler, Transmitter};
+use crate::model::{Message, MessageSchedule, MetricEvent, SchedulePattern};
 
 static BATCH_SIZE: u32 = 100;
 

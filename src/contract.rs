@@ -7,7 +7,7 @@ use chrono::prelude::*;
 use mockall::{automock, mock, predicate::*};
 use uuid::Uuid;
 
-use crate::model::{Message, MessageSchedule, SchedulePattern};
+use crate::model::{Message, MessageSchedule, MetricEvent, SchedulePattern};
 
 #[cfg_attr(test, automock)]
 #[async_trait]
@@ -58,15 +58,6 @@ impl Now for UtcNow {
     fn now(&self) -> DateTime<Utc> {
         Utc::now()
     }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum MetricEvent {
-    Scheduled(bool),
-    Polled(bool),
-    Transmitted(bool),
-    ScheduleStateSaved(bool),
-    Rescheduled(bool),
 }
 
 #[cfg_attr(test, automock)]
