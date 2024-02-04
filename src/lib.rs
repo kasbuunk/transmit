@@ -1,3 +1,4 @@
+pub mod config;
 pub mod contract;
 pub mod grpc;
 pub mod integration_test;

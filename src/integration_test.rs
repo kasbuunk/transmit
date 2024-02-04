@@ -248,7 +248,7 @@ mod tests {
     }
 
     async fn prepare_nats() -> async_nats::Client {
-        let nats_config = transmitter_nats::NatsConfig {
+        let nats_config = transmitter_nats::Config {
             port: 4222,
             host: "localhost".to_string(),
         };

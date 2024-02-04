@@ -2,11 +2,13 @@ use std::error::Error;
 
 use async_trait::async_trait;
 use log::info;
+use serde::Deserialize;
 
 use crate::contract::Transmitter;
 use crate::model::Message;
 
-pub struct NatsConfig {
+#[derive(Debug, Deserialize)]
+pub struct Config {
     pub port: u16,
     pub host: String,
 }
@@ -54,7 +56,7 @@ mod test {
     //
     // Run with `docker run -p 4222:4222 -ti nats:latest`.
     async fn test_transmitter() {
-        let nats_config = NatsConfig {
+        let nats_config = Config {
             port: 4222,
             host: "localhost".to_string(),
         };
