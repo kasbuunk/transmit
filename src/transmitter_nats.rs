@@ -25,7 +25,7 @@ impl NatsPublisher {
 
 #[async_trait]
 impl Transmitter for NatsPublisher {
-    async fn transmit(&self, event: Message) -> Result<(), Box<dyn Error>> {
+    async fn transmit(&self, event: Message) -> Result<(), Box<dyn Error + Send + Sync>> {
         match event {
             Message::NatsEvent(nats_event) => {
                 self.client

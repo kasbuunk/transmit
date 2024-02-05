@@ -94,6 +94,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         metrics_client,
     ));
 
+    let scheduler_running = scheduler.clone();
+    let _handle = tokio::spawn(async move {
+        scheduler_running.run().await;
+    });
+
     // Construct transport.
     match config.transport {
         config::Transport::Grpc(grpc_config) => {

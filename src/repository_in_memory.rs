@@ -22,7 +22,10 @@ impl RepositoryInMemory {
 
 #[async_trait]
 impl Repository for RepositoryInMemory {
-    async fn store_schedule(&self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
+    async fn store_schedule(
+        &self,
+        schedule: &MessageSchedule,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.schedules
             .lock()
             .expect("mutex is poisoned")
@@ -51,7 +54,7 @@ impl Repository for RepositoryInMemory {
             .collect())
     }
 
-    async fn save(&self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
+    async fn save(&self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error + Send + Sync>> {
         for stored_schedule in self.schedules.lock().unwrap().iter_mut() {
             if stored_schedule.id == schedule.id {
                 *stored_schedule = schedule.clone();
@@ -62,7 +65,10 @@ impl Repository for RepositoryInMemory {
     }
 
     // reschedule is unnecessary for an in-memory implementation.
-    async fn reschedule(&self, _schedule_id: &uuid::Uuid) -> Result<(), Box<dyn Error>> {
+    async fn reschedule(
+        &self,
+        _schedule_id: &uuid::Uuid,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(())
     }
 }

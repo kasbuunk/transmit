@@ -117,7 +117,10 @@ impl MessageScheduler {
         Ok(())
     }
 
-    async fn transmit(&self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
+    async fn transmit(
+        &self,
+        schedule: &MessageSchedule,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let transmission_result = self.transmitter.transmit(schedule.message.clone()).await;
 
         info!("Transmitted message from schedule with id: {}", schedule.id);
@@ -618,8 +621,11 @@ mod tests {
         )
     }
 
-    type ScheduleSaveFn = dyn Fn(&MessageSchedule) -> Result<(), Box<dyn Error + 'static>> + Send;
-    type RescheduleFn = dyn Fn(&Uuid) -> Result<(), Box<dyn Error + 'static>> + Send;
+    type ScheduleSaveFn = dyn Fn(&MessageSchedule) -> Result<(), Box<dyn Error + Send + Sync + 'static>>
+        + Send
+        + Sync;
+    type RescheduleFn =
+        dyn Fn(&Uuid) -> Result<(), Box<dyn Error + Send + Sync + 'static>> + Send + Sync;
 
     enum ScheduleStateTransition {
         Save(Box<ScheduleSaveFn>, bool),
@@ -629,7 +635,8 @@ mod tests {
     struct TransmissionTestCase {
         name: String,
         schedule: MessageSchedule,
-        transmission: Box<dyn Fn(Message) -> Result<(), Box<dyn Error + 'static>> + Send>,
+        transmission:
+            Box<dyn Fn(Message) -> Result<(), Box<dyn Error + Send + Sync + 'static>> + Send>,
         schedule_state_transition: ScheduleStateTransition,
         success: bool,
     }

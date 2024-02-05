@@ -205,7 +205,7 @@ impl MessageSchedule {
     // transmitted transitions the MessageSchedule to the next state, appropriate when transmitted.
     //
     // Returns an error if the current next field is None.
-    pub fn transmitted(&self) -> Result<MessageSchedule, Box<dyn Error>> {
+    pub fn transmitted(&self) -> Result<MessageSchedule, Box<dyn Error + Send + Sync>> {
         if self.next.is_none() {
             return Err("The message was not in a state to be transmitted, because the next datetime was None.".into());
         }
