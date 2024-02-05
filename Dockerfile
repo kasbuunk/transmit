@@ -23,4 +23,4 @@ ENV SQLX_OFFLINE true
 RUN cargo build --release
 
 # Set the entry point for the container.
-CMD ["./target/release/message_scheduler", "config.ron"]
+CMD ["./target/release/message_scheduler"]

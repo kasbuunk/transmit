@@ -17,7 +17,7 @@ message Delayed {
 }
 
 message ScheduleMessageRequest {
-	oneof schedule {
+	oneof Schedule {
 		Delayed delayed = 1;
 	}
 	oneof Message {

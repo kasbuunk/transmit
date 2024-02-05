@@ -51,7 +51,7 @@ impl MetricServer {
     pub async fn start_server(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let registry = Arc::new(self.registry);
 
-        let address = SocketAddr::from(([127, 0, 0, 1], self.config.port));
+        let address = SocketAddr::from(([0, 0, 0, 0], self.config.port));
 
         // We create a TcpListener and bind it to the address.
         let listener = TcpListener::bind(address).await?;

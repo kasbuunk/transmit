@@ -35,7 +35,7 @@ impl GrpcServer {
     }
 
     pub async fn serve(self) -> Result<(), Box<dyn Error>> {
-        let host = "127.0.0.1";
+        let host = "0.0.0.0";
         let address = format!("{}:{}", host, self.config.port).parse()?;
         let scheduler_server = SchedulerServer::new(self);
 
@@ -56,6 +56,8 @@ impl proto::scheduler_server::Scheduler for GrpcServer {
         &self,
         request: Request<ScheduleMessageRequest>,
     ) -> Result<Response<ScheduleMessageResponse>, Status> {
+        info!("ScheduleMessage request received");
+
         let request_data = request.into_inner();
         let schedule_proto = match request_data.schedule {
             None => return Err(Status::invalid_argument("schedule is required")),
