@@ -59,7 +59,7 @@ impl MessageScheduler {
         }
     }
 
-    pub async fn run(&mut self) -> ! {
+    pub async fn run(&self) -> ! {
         loop {
             match self.process_batch().await {
                 Ok(_) => (),
@@ -75,7 +75,7 @@ impl MessageScheduler {
     // error. Or, errors should have a separate thing. We don't want any errors to meddle with
     // things that may errored as a one-off problem; likewise we need errors to be transparent by
     // metrics and logging.
-    pub async fn process_batch(&mut self) -> Result<(), Box<dyn Error>> {
+    pub async fn process_batch(&self) -> Result<(), Box<dyn Error>> {
         let now = self.now.now();
 
         let schedules = match self.repository.poll_batch(now, BATCH_SIZE).await {
@@ -117,7 +117,7 @@ impl MessageScheduler {
         Ok(())
     }
 
-    async fn transmit(&mut self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
+    async fn transmit(&self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error>> {
         let transmission_result = self.transmitter.transmit(schedule.message.clone()).await;
 
         info!("Transmitted message from schedule with id: {}", schedule.id);
