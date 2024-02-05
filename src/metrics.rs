@@ -12,25 +12,30 @@ use prometheus_client::encoding::{EncodeLabelSet, EncodeLabelValue};
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::registry::Registry;
+use serde::Deserialize;
 use std::{future::Future, io, net::SocketAddr, pin::Pin, sync::Arc};
 use tokio::net::TcpListener;
 
 const METRIC_NAME: &str = "procedure";
 const METRIC_HELP_TEXT: &str = "Number of procedure calls";
 
+#[derive(Debug, Deserialize)]
 pub struct Config {
     pub port: u16,
     pub endpoint: String,
 }
 
-pub fn new() -> (MetricClient, MetricServer) {
+pub fn new(config: Config) -> (MetricClient, MetricServer) {
     let mut registry = <Registry>::default();
 
     let procedure_metric = Family::<ResultLabel, Counter>::default();
 
     registry.register(METRIC_NAME, METRIC_HELP_TEXT, procedure_metric.clone());
 
-    (MetricClient { procedure_metric }, MetricServer { registry })
+    (
+        MetricClient { procedure_metric },
+        MetricServer { config, registry },
+    )
 }
 
 pub struct MetricClient {
@@ -38,21 +43,15 @@ pub struct MetricClient {
 }
 
 pub struct MetricServer {
+    config: Config,
     registry: Registry,
 }
 
 impl MetricServer {
-    pub async fn start_server(
-        self,
-        port: u16,
-        // Specific endpoint may be useful to implement if the prometheus
-        // client prefers a specific one, and if on this port other routes
-        // must be supported.
-        _endpoint: String,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start_server(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let registry = Arc::new(self.registry);
 
-        let address = SocketAddr::from(([127, 0, 0, 1], port));
+        let address = SocketAddr::from(([127, 0, 0, 1], self.config.port));
 
         // We create a TcpListener and bind it to the address.
         let listener = TcpListener::bind(address).await?;
@@ -184,7 +183,11 @@ mod tests {
 
     #[test]
     fn test_metric_increment() {
-        let (prometheus_client, prometheus_server) = new();
+        let config = Config {
+            port: 0,
+            endpoint: "/".to_string(),
+        };
+        let (prometheus_client, prometheus_server) = new(config);
         prometheus_client.count(MetricEvent::Polled(false));
 
         let mut buffer = String::new();
@@ -202,17 +205,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_metric_server() -> Result<(), Box<dyn std::error::Error>> {
+        let port = 8083;
         let config = Config {
-            port: 8083,
+            port,
             endpoint: "".to_string(),
         };
 
-        let (prometheus_client, prometheus_server) = new();
+        let (prometheus_client, prometheus_server) = new(config);
 
         // Spawn thread.
         let _handle = tokio::spawn(async move {
             prometheus_server
-                .start_server(config.port, config.endpoint)
+                .start_server()
                 .await
                 .expect("prometheus server must start");
         });
@@ -223,7 +227,7 @@ mod tests {
         prometheus_client.count(MetricEvent::Scheduled(true));
 
         // Send metric request.
-        let address = format!("http://localhost:{}", config.port);
+        let address = format!("http://localhost:{}", port);
         let response_body = reqwest::get(address).await?.text().await?;
 
         // Assert metric body content.

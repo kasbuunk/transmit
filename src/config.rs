@@ -4,6 +4,7 @@ use std::io::Read;
 use serde::Deserialize;
 
 use crate::grpc;
+use crate::metrics;
 use crate::postgres;
 use crate::transmitter_nats;
 
@@ -13,6 +14,7 @@ pub struct Config {
     pub transmitter: Transmitter,
     pub repository: Repository,
     pub transport: Transport,
+    pub metrics: Metrics,
 }
 
 #[derive(Debug, Deserialize)]
@@ -31,6 +33,11 @@ pub enum Repository {
     InMemory,
 }
 
+#[derive(Debug, Deserialize)]
+pub enum Metrics {
+    Prometheus(metrics::Config),
+}
+
 pub fn load_config_from_file(file_path: &str) -> Result<Config, Box<dyn std::error::Error>> {
     let mut file = File::open(file_path)?;
     let mut contents = String::new();
@@ -38,4 +45,18 @@ pub fn load_config_from_file(file_path: &str) -> Result<Config, Box<dyn std::err
 
     let config: Config = ron::de::from_str(&contents)?;
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_load_config() {
+        let config = load_config_from_file("./sample.ron").expect("could not load configuration");
+
+        // Merely asserting the log level is enough to assert the structure of the configuration
+        // file.
+        assert_eq!(config.log_level, "debug".to_string());
+    }
 }
