@@ -2,16 +2,9 @@ use std::error::Error;
 
 use async_trait::async_trait;
 use log::info;
-use serde::Deserialize;
 
 use crate::contract::Transmitter;
 use crate::model::Message;
-
-#[derive(Debug, Deserialize)]
-pub struct Config {
-    pub port: u16,
-    pub host: String,
-}
 
 pub struct NatsPublisher {
     client: async_nats::Client,
@@ -40,27 +33,18 @@ impl Transmitter for NatsPublisher {
     }
 }
 
-pub async fn connect_to_nats(
-    config: Config,
-) -> Result<async_nats::Client, Box<dyn std::error::Error>> {
-    let connection_string = format!("nats://{}:{}", config.host, config.port);
-
-    info!("Connecting to {}", connection_string);
-
-    let client = async_nats::connect(connection_string).await?;
-
-    Ok(client)
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::model::NatsEvent;
-    use futures::StreamExt;
+
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use bytes::Bytes;
+    use futures::StreamExt;
+
+    use crate::model::NatsEvent;
+    use crate::nats::Config;
 
     #[tokio::test]
     // This is a sociable unit test, i.e. it integrates with nats, which is expected to run and be

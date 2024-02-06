@@ -9,6 +9,7 @@ use message_scheduler::config;
 use message_scheduler::contract;
 use message_scheduler::grpc;
 use message_scheduler::metrics;
+use message_scheduler::nats;
 use message_scheduler::postgres;
 use message_scheduler::repository_in_memory;
 use message_scheduler::repository_postgres;
@@ -40,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Construct transmitter.
     let transmitter: Arc<dyn contract::Transmitter> = match config.transmitter {
         config::Transmitter::Nats(nats_config) => {
-            let nats_client = transmitter_nats::connect_to_nats(nats_config).await?;
+            let nats_client = nats::connect_to_nats(nats_config).await?;
             let transmitter = transmitter_nats::NatsPublisher::new(nats_client);
             info!("Initialised nats transmitter.");
 

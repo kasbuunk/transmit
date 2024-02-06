@@ -4,6 +4,7 @@ pub mod grpc;
 pub mod integration_test;
 pub mod metrics;
 pub mod model;
+pub mod nats;
 pub mod postgres;
 pub mod repository_in_memory;
 pub mod repository_postgres;

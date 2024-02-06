@@ -12,6 +12,7 @@ mod tests {
     use crate::contract::*;
     use crate::grpc;
     use crate::model::MetricEvent;
+    use crate::nats;
     use crate::postgres;
     use crate::repository_postgres;
     use crate::scheduler;
@@ -77,7 +78,12 @@ mod tests {
         repository.clear_all().await.expect("could not clear table");
 
         // Initialise nats connection.
-        let nats_connection = prepare_nats().await;
+        let nats_connection = nats::connect_to_nats(nats::Config {
+            port: 4222,
+            host: "0.0.0.0".to_string(),
+        })
+        .await
+        .expect("could not connect to nats; is the server running on port 4222?");
         // Construct transmitter.
         let transmitter = transmitter_nats::NatsPublisher::new(nats_connection.clone());
 
@@ -245,18 +251,5 @@ mod tests {
             .expect("connecting to postgers failed. Is postgres running on port 5432?");
 
         connection
-    }
-
-    async fn prepare_nats() -> async_nats::Client {
-        let nats_config = transmitter_nats::Config {
-            port: 4222,
-            host: "localhost".to_string(),
-        };
-        let address = format!("nats://{}:{}", nats_config.host, nats_config.port);
-        let client = async_nats::connect(address)
-            .await
-            .expect("Nats connection failed. Is nats running on address {address}?");
-
-        client
     }
 }

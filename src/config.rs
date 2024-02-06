@@ -5,8 +5,8 @@ use serde::Deserialize;
 
 use crate::grpc;
 use crate::metrics;
+use crate::nats;
 use crate::postgres;
-use crate::transmitter_nats;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -24,7 +24,7 @@ pub enum Transport {
 
 #[derive(Debug, Deserialize)]
 pub enum Transmitter {
-    Nats(transmitter_nats::Config),
+    Nats(nats::Config),
 }
 
 #[derive(Debug, Deserialize)]

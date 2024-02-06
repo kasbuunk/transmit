@@ -7,7 +7,7 @@ mod tests {
     use futures::StreamExt;
 
     use message_scheduler::grpc;
-    use message_scheduler::transmitter_nats;
+    use message_scheduler::nats;
 
     #[tokio::test]
     // To monitor the transmitted messages, run nats via docker with:
@@ -17,7 +17,12 @@ mod tests {
     async fn schedule_message() {
         let timestamp_now = Utc::now();
         let transmit_after_seconds = timestamp_now + Duration::milliseconds(800); // Initialise nats connection.
-        let nats_connection = prepare_nats().await;
+        let nats_connection = nats::connect_to_nats(nats::Config {
+            port: 4222,
+            host: "0.0.0.0".to_string(),
+        })
+        .await
+        .expect("could not connect to nats on port 4222");
 
         // Subscribe to test subject, to assert transmissions.
         let subject = "ENDTOEND.schedule_message";
@@ -140,18 +145,5 @@ mod tests {
             }
         });
         handle
-    }
-
-    async fn prepare_nats() -> async_nats::Client {
-        let nats_config = transmitter_nats::Config {
-            port: 4222,
-            host: "localhost".to_string(),
-        };
-        let address = format!("nats://{}:{}", nats_config.host, nats_config.port);
-        let client = async_nats::connect(address)
-            .await
-            .expect("Nats connection failed. Is nats running on address {address}?");
-
-        client
     }
 }
