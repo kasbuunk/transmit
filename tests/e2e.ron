@@ -1,0 +1,30 @@
+(
+	log_level: "debug",
+	metrics: Prometheus(
+		Config(
+			port: 9090,
+			endpoint: "/",
+		),
+	),
+	repository: Postgres(
+		Config(
+			name: "transmit_test",
+			host: "db",
+			port: 5432,
+			user: "postgres",
+			password: "postgres",
+			ssl: false,
+		),
+	),
+	transmitter: Nats(
+		Config(
+			host: "nats",
+			port: 4222,
+		),
+	),
+	transport: Grpc(
+		Config(
+			port: 8080,
+		),
+	),
+)

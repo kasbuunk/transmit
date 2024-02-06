@@ -1,0 +1,45 @@
+version: "3"
+services:
+  transmit:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      - db
+      - nats
+      - prometheus
+    ports:
+      - "8080:8080"
+    volumes:
+      # This assumes a `config.ron` file is located at the
+      # root of the build context.
+      - ./e2e.ron:/usr/src/transmit/config.ron
+
+  db:
+    image: postgres:latest
+    environment:
+      - POSTGRES_DB=transmit_test
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+
+  nats:
+    image: nats:latest
+    ports:
+      - "4222:4222"
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      # This assumes a `prometheus.yaml` file is located at the
+      # root of the build context.
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yml
+
+volumes:
+  dbdata:
+    driver: local
