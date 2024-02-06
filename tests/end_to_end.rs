@@ -16,9 +16,7 @@ mod tests {
     // `nats sub -s "nats://localhost:4222" INTEGRATION.schedule_message`
     async fn schedule_message() {
         let timestamp_now = Utc::now();
-        let transmit_after_seconds = timestamp_now + Duration::seconds(5);
-
-        // Initialise nats connection.
+        let transmit_after_seconds = timestamp_now + Duration::milliseconds(800); // Initialise nats connection.
         let nats_connection = prepare_nats().await;
 
         // Subscribe to test subject, to assert transmissions.
@@ -55,11 +53,11 @@ mod tests {
         )
         .await;
         // Wait too little time to assert no transmission until the schedule is met.
-        let timeout_duration = std::time::Duration::from_millis(4000);
+        let timeout_duration = std::time::Duration::from_millis(600);
         let timeout_reached = tokio::time::timeout(timeout_duration, async {
             // Wait until the flag is set to true (message received)
             while !*received_flag_after_10s.lock().unwrap() {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         })
         .await;
@@ -73,15 +71,17 @@ mod tests {
             received_flag_after_60s.clone(),
         )
         .await;
-        let timeout_duration = std::time::Duration::from_millis(1200);
+        let timeout_duration = std::time::Duration::from_millis(300);
         let timeout_reached = tokio::time::timeout(timeout_duration, async {
             // Wait until the flag is set to true (message received)
             while !*received_flag_after_60s.lock().unwrap() {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         })
         .await;
-        timeout_reached.expect("transmission should set flag before timeout");
+        timeout_reached.expect(
+            "transmission not received in expected timelapse; should set flag before timeout",
+        );
 
         // Invoke another poll-transmit (fourth: two_minutes_later), assert happened.
         let received_flag_after_120s = Arc::new(Mutex::new(false));
@@ -91,11 +91,11 @@ mod tests {
             received_flag_after_120s.clone(),
         )
         .await;
-        let timeout_duration = std::time::Duration::from_millis(3000);
+        let timeout_duration = std::time::Duration::from_millis(500);
         let timeout_reached = tokio::time::timeout(timeout_duration, async {
             // Wait until the flag is set to true (message received)
             while !*received_flag_after_120s.lock().unwrap() {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         })
         .await;
