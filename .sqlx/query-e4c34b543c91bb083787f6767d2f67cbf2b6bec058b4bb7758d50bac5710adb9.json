@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from message_schedule;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "e4c34b543c91bb083787f6767d2f67cbf2b6bec058b4bb7758d50bac5710adb9"
+}

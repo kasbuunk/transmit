@@ -54,8 +54,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config::Repository::Postgres(postgres_config) => {
             let postgres_connection = postgres::connect_to_database(postgres_config).await?;
             let repository = repository_postgres::RepositoryPostgres::new(postgres_connection);
-            repository.migrate().await?;
+
             info!("Initialised postgres repository.");
+
+            if config.automigrate {
+                info!("Running migrations.");
+
+                repository.migrate().await?;
+            }
+
+            if config.reset_state {
+                repository.clear_all().await?;
+            }
 
             Arc::new(repository)
         }

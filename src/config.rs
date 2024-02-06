@@ -10,11 +10,13 @@ use crate::postgres;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
+    pub automigrate: bool,
     pub log_level: String,
-    pub transmitter: Transmitter,
-    pub repository: Repository,
-    pub transport: Transport,
     pub metrics: Metrics,
+    pub repository: Repository,
+    pub reset_state: bool,
+    pub transmitter: Transmitter,
+    pub transport: Transport,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,10 +55,11 @@ mod tests {
 
     #[test]
     fn test_load_config() {
-        let config = load_config_from_file("./sample.ron").expect("could not load configuration");
+        // The sample config is checked in to version control, so must always be up-to-date.
+        let config_file = "./sample.ron";
+        let config = load_config_from_file(config_file).expect("could not load configuration");
 
-        // Merely asserting the log level is enough to assert the structure of the configuration
-        // file.
+        // Merely asserting the log level is enough to assert the structure of the file contents.
         assert_eq!(config.log_level, "debug".to_string());
     }
 }

@@ -30,7 +30,6 @@ impl RepositoryPostgres {
         Ok(())
     }
 
-    #[cfg(test)]
     pub async fn clear_all(&self) -> Result<(), Box<dyn Error>> {
         info!("deleting all message schedules");
         let _ = sqlx::query!("delete from message_schedule;")

@@ -1,4 +1,6 @@
 (
+	automigrate: true,
+	reset_state: false,
 	log_level: "debug",
 	metrics: Prometheus(
 		Config(
