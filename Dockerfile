@@ -1,5 +1,5 @@
-# Use the official Rust image as the base image.
-FROM rust:latest
+# Stage 1: Build the binary
+FROM rust:1.75.0-bookworm AS builder
 
 # Install Protocol Buffers compiler.
 RUN apt-get update && apt-get install -y protobuf-compiler
@@ -13,8 +13,12 @@ COPY Cargo.toml Cargo.lock ./
 # Build and cache dependencies by running a dummy build.
 RUN mkdir src && echo "fn main() {}" > src/main.rs && touch src/lib.rs && cargo build --release && rm -rf src
 
-# Copy the entire application source code to the container.
-COPY . .
+# Copy the relevant application source code to the container.
+COPY ./src ./src
+COPY ./migrations ./migrations
+COPY ./build.rs ./build.rs
+COPY ./.sqlx ./.sqlx
+COPY ./proto ./proto
 
 # Turn off sqlx compile-time verification.
 ENV SQLX_OFFLINE true
@@ -22,5 +26,13 @@ ENV SQLX_OFFLINE true
 # Build the application.
 RUN cargo build --release
 
+# Stage 2: Create the final image.
+FROM debian:bookworm-slim
+
+# Copy the built binary from the previous stage.
+COPY --from=builder /usr/src/transmit/target/release/message_scheduler /usr/local/bin/message_scheduler
+
+COPY ./config.ron ./config.ron
+
 # Set the entry point for the container.
-CMD ["./target/release/message_scheduler"]
+ENTRYPOINT ["/usr/local/bin/message_scheduler"]
