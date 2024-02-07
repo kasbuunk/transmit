@@ -2,6 +2,13 @@
 name = "transmit"
 version = "0.1.0"
 edition = "2021"
+authors = ["Kas Buunk"]
+repository = "https://github.com/kasbuunk/transmit"
+homepage = "https://github.com/kasbuunk/transmit"
+description = "Transmission Scheduler of delayed and periodic messages."
+license-file = "LICENSE"
+readme = "README.md"
+keywords = ["transmit", "scheduler"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
