@@ -9,7 +9,6 @@ use chrono::prelude::*;
 use futures_util::FutureExt;
 use log::{error, info};
 use serde::Deserialize;
-use tokio::select;
 use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server, Request, Response, Status};
 

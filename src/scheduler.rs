@@ -1,7 +1,5 @@
 use std::error::Error;
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use async_trait::async_trait;
@@ -16,7 +14,7 @@ use crate::model::{Message, MessageSchedule, MetricEvent, SchedulePattern};
 static BATCH_SIZE: u32 = 100;
 
 #[derive(Clone)]
-pub struct MessageScheduler {
+pub struct TransmissionScheduler {
     // repository keeps the program stateless, by providing a storage interface to store and
     // retrieve message schedules.
     repository: Arc<dyn Repository>,
@@ -29,7 +27,7 @@ pub struct MessageScheduler {
 }
 
 #[async_trait]
-impl Scheduler for MessageScheduler {
+impl Scheduler for TransmissionScheduler {
     async fn schedule(&self, when: SchedulePattern, what: Message) -> Result<Uuid, Box<dyn Error>> {
         let schedule = MessageSchedule::new(when, what);
         match self.repository.store_schedule(&schedule).await {
@@ -45,14 +43,14 @@ impl Scheduler for MessageScheduler {
     }
 }
 
-impl MessageScheduler {
+impl TransmissionScheduler {
     pub fn new(
         repository: Arc<dyn Repository>,
         transmitter: Arc<dyn Transmitter>,
         now: Arc<dyn Now>,
         metrics: Arc<dyn Metrics>,
-    ) -> MessageScheduler {
-        MessageScheduler {
+    ) -> TransmissionScheduler {
+        TransmissionScheduler {
             repository,
             transmitter,
             now,
@@ -253,7 +251,7 @@ mod tests {
                 .returning(|_| ())
                 .times(1);
 
-            let mut scheduler = MessageScheduler::new(
+            let mut scheduler = TransmissionScheduler::new(
                 Arc::new(repository),
                 Arc::new(transmitter),
                 Arc::new(now),
@@ -325,7 +323,7 @@ mod tests {
             .returning(|_| ())
             .times(1);
 
-        let mut scheduler = MessageScheduler::new(
+        let mut scheduler = TransmissionScheduler::new(
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(now), // First call to now will be too early for the given time, the next will
@@ -414,7 +412,7 @@ mod tests {
             .returning(|_| ())
             .times(3);
 
-        let mut scheduler = MessageScheduler::new(
+        let mut scheduler = TransmissionScheduler::new(
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(Utc::now),
@@ -498,7 +496,7 @@ mod tests {
             .returning(|_| ())
             .times(3);
 
-        let mut scheduler = MessageScheduler::new(
+        let mut scheduler = TransmissionScheduler::new(
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(Utc::now),
@@ -529,7 +527,7 @@ mod tests {
             .returning(|_| ())
             .times(1);
 
-        let scheduler = MessageScheduler::new(
+        let scheduler = TransmissionScheduler::new(
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(Utc::now),
@@ -559,7 +557,7 @@ mod tests {
             .returning(|_| ())
             .times(1);
 
-        let scheduler = MessageScheduler::new(
+        let scheduler = TransmissionScheduler::new(
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(Utc::now),
@@ -852,7 +850,7 @@ mod tests {
                 }
             };
 
-            let mut scheduler = MessageScheduler::new(
+            let mut scheduler = TransmissionScheduler::new(
                 Arc::new(repository),
                 Arc::new(transmitter),
                 Arc::new(Utc::now),
@@ -920,7 +918,7 @@ mod tests {
             .returning(|_| ())
             .times(amount_schedules);
 
-        let mut scheduler = MessageScheduler::new(
+        let mut scheduler = TransmissionScheduler::new(
             Arc::new(repository),
             Arc::new(publisher),
             Arc::new(Utc::now),
@@ -974,7 +972,7 @@ mod tests {
             .returning(|_| ())
             .times(1);
 
-        let mut scheduler = MessageScheduler::new(
+        let mut scheduler = TransmissionScheduler::new(
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(Utc::now),
@@ -1086,7 +1084,7 @@ mod tests {
             .returning(|_| ())
             .times(1);
 
-        let mut scheduler = MessageScheduler::new(
+        let mut scheduler = TransmissionScheduler::new(
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(Utc::now),
@@ -1195,7 +1193,7 @@ mod tests {
             .returning(|_| ())
             .times(1);
 
-        let mut scheduler = MessageScheduler::new(
+        let mut scheduler = TransmissionScheduler::new(
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(now),

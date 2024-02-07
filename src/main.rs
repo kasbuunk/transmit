@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use chrono::prelude::*;
 use log::info;
-use tokio::signal;
+use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::sync::CancellationToken;
 
 use transmit::config;
@@ -100,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let now_provider = Arc::new(Utc::now);
 
     // Construct scheduler.
-    let scheduler = Arc::new(scheduler::MessageScheduler::new(
+    let scheduler = Arc::new(scheduler::TransmissionScheduler::new(
         repository,
         transmitter,
         now_provider,
@@ -133,14 +133,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Listen for cancellation signal.
-    match signal::ctrl_c().await {
-        Ok(()) => {
+    let mut sigint = signal(SignalKind::interrupt())?;
+    let mut sigterm = signal(SignalKind::terminate())?;
+    tokio::select! {
+        _ = sigint.recv() => {
+            info!("Received SIGINT. Sending cancellation signal.");
+
             token.cancel();
         }
-        Err(err) => {
-            eprintln!("Unable to listen for shutdown signal: {}", err);
+        _ = sigterm.recv() => {
+            info!("Received SIGTERM. Sending cancellation signal.");
 
-            // Also shut down if listening for cancellation fails.
             token.cancel();
         }
     }
