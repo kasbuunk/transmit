@@ -8,6 +8,7 @@ mod tests {
     use mockall::predicate::*;
     use mockall::Sequence;
     use sqlx::postgres::PgPool;
+    use tokio_util::sync::CancellationToken;
 
     use crate::contract::*;
     use crate::grpc;
@@ -119,7 +120,7 @@ mod tests {
         let grpc_server = grpc::GrpcServer::new(grpc_config, scheduler_arc.clone());
         tokio::task::spawn(async move {
             grpc_server
-                .serve()
+                .serve(CancellationToken::new())
                 .await
                 .expect("failed to start grpc server");
         });
