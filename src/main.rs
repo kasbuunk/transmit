@@ -7,16 +7,16 @@ use log::info;
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 
-use message_scheduler::config;
-use message_scheduler::contract;
-use message_scheduler::grpc;
-use message_scheduler::metrics;
-use message_scheduler::nats;
-use message_scheduler::postgres;
-use message_scheduler::repository_in_memory;
-use message_scheduler::repository_postgres;
-use message_scheduler::scheduler;
-use message_scheduler::transmitter_nats;
+use transmit::config;
+use transmit::contract;
+use transmit::grpc;
+use transmit::metrics;
+use transmit::nats;
+use transmit::postgres;
+use transmit::repository_in_memory;
+use transmit::repository_postgres;
+use transmit::scheduler;
+use transmit::transmitter_nats;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -30,10 +30,10 @@ RUN cargo build --release
 FROM debian:bookworm-slim
 
 # Copy the built binary from the previous stage.
-COPY --from=builder /usr/src/transmit/target/release/message_scheduler /usr/local/bin/message_scheduler
+COPY --from=builder /usr/src/transmit/target/release/transmit /usr/local/bin/transmit
 
 # In this directory, docker-compose can mount the configuration file.
 WORKDIR /usr/src/transmit
 
 # Set the entry point for the container.
-ENTRYPOINT ["/usr/local/bin/message_scheduler"]
+ENTRYPOINT ["/usr/local/bin/transmit"]

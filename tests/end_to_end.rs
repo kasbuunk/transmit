@@ -6,9 +6,9 @@ mod tests {
     use chrono::Duration;
     use futures::StreamExt;
 
-    use message_scheduler::config;
-    use message_scheduler::grpc;
-    use message_scheduler::nats;
+    use transmit::config;
+    use transmit::grpc;
+    use transmit::nats;
 
     #[tokio::test]
     // To monitor the transmitted messages, run nats via docker with:
