@@ -1,7 +1,8 @@
 use std::error::Error;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time;
+use tokio_util::sync::CancellationToken;
 
 use async_trait::async_trait;
 use log::{error, info, warn};
@@ -59,15 +60,27 @@ impl MessageScheduler {
         }
     }
 
-    pub async fn run(&self) -> ! {
+    pub async fn run(&self, cancel_token: CancellationToken) -> () {
         loop {
             match self.process_batch().await {
                 Ok(_) => (),
                 Err(err) => error!("error: {:?}", err),
             };
 
-            thread::sleep(time::Duration::from_millis(100));
+            // Graceful shutdown on interrupt signal.
+            tokio::select! {
+                _ = cancel_token.cancelled() => {
+
+                    info!("Cancellation signal received. Shutting down application.");
+
+                    break;
+                }
+
+                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+            }
         }
+
+        info!("Application was shut down.");
     }
 
     // process_batch retrieves schedules that are overdue, and in scheduled state. It transitions them

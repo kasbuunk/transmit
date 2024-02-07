@@ -16,8 +16,9 @@ mod tests {
     // And observe live with:
     // `nats sub -s "nats://localhost:4222" INTEGRATION.schedule_message`
     async fn schedule_message() {
+        let config_filename = "./tests/e2e.ron";
         let configuration =
-            config::load_config_from_file("./tests/e2e.ron").expect("could not load configuration");
+            config::load_config_from_file(config_filename).expect("could not load configuration");
         assert_eq!(configuration.log_level, "debug");
 
         let timestamp_now = Utc::now();
@@ -51,9 +52,13 @@ mod tests {
         let address = format!("http://{}:{}", host, grpc_port);
 
         // Connect to serer.
-        let mut grpc_client = grpc::proto::scheduler_client::SchedulerClient::connect(address)
-            .await
-            .expect("failed to connect to grpc server");
+        let mut grpc_client =
+            grpc::proto::scheduler_client::SchedulerClient::connect(address.clone())
+                .await
+                .expect(&format!(
+                    "failed to connect to grpc server on address {}",
+                    &address
+                ));
         // Do the request.
         let response = grpc_client
             .schedule_message(grpc_request)

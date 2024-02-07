@@ -6,8 +6,11 @@ use std::time::SystemTime;
 use mockall::predicate::*;
 
 use chrono::prelude::*;
+use futures_util::FutureExt;
 use log::{error, info};
 use serde::Deserialize;
+use tokio::select;
+use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server, Request, Response, Status};
 
 use crate::contract::Scheduler;
@@ -34,17 +37,34 @@ impl GrpcServer {
         GrpcServer { config, scheduler }
     }
 
-    pub async fn serve(self) -> Result<(), Box<dyn Error>> {
+    pub async fn serve(self, cancel_token: CancellationToken) -> Result<(), Box<dyn Error>> {
         let host = "0.0.0.0";
         let address = format!("{}:{}", host, self.config.port).parse()?;
         let scheduler_server = SchedulerServer::new(self);
 
         info!("Start listening for incoming messages at {}.", address);
 
-        Server::builder()
-            .add_service(scheduler_server)
-            .serve(address)
-            .await?;
+        let server = Server::builder().add_service(scheduler_server);
+
+        // Create a signal channel for graceful shutdown.
+        let (shutdown_sender, shutdown_receiver) = tokio::sync::oneshot::channel::<()>();
+
+        // Spawn a task to wait for the cancellation token or shutdown signal.
+        let serve_task = tokio::spawn(async move {
+            tokio::select! {
+                _ = cancel_token.cancelled() => {
+                    // Handle cancellation
+                    let _ = shutdown_sender.send(());
+                    info!("Shutting down gRPC server");
+                }
+                _ = server.serve_with_shutdown(address, shutdown_receiver.map(drop)) => {
+                }
+            }
+        });
+
+        serve_task.await?;
+
+        info!("gRPC server was shut down.");
 
         Ok(())
     }

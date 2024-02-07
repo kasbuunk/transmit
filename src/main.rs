@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use chrono::prelude::*;
 use log::info;
+use tokio::signal;
+use tokio_util::sync::CancellationToken;
 
 use message_scheduler::config;
 use message_scheduler::contract;
@@ -105,20 +107,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         metrics_client,
     ));
 
+    // Initiate shared signal for graceful shutdown.
+    let token = CancellationToken::new();
+    let token_scheduler = token.clone();
+    let token_grpc = token.clone();
+
     let scheduler_running = scheduler.clone();
     let _handle = tokio::spawn(async move {
-        scheduler_running.run().await;
+        scheduler_running.run(token_scheduler).await;
     });
 
     // Construct transport.
-    match config.transport {
+    let grpc_handle = match config.transport {
         config::Transport::Grpc(grpc_config) => {
             let grpc_server = grpc::GrpcServer::new(grpc_config, scheduler);
 
             // Start gRPC server.
-            grpc_server.serve().await?
+            tokio::spawn(async move {
+                grpc_server
+                    .serve(token_grpc)
+                    .await
+                    .expect("grpc server must start")
+            })
+        }
+    };
+
+    // Listen for cancellation signal.
+    match signal::ctrl_c().await {
+        Ok(()) => {
+            token.cancel();
+        }
+        Err(err) => {
+            eprintln!("Unable to listen for shutdown signal: {}", err);
+
+            // Also shut down if listening for cancellation fails.
+            token.cancel();
         }
     }
+
+    grpc_handle.await?;
+
+    info!("All application components have shut down.");
 
     Ok(())
 }

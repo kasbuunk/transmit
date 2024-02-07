@@ -1,5 +1,6 @@
 version: "3"
 services:
+  # Uncomment out to just run the dependencies and run locally.
   # transmit:
   #   build:
   #     context: .

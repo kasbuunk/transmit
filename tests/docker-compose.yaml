@@ -9,7 +9,7 @@ services:
       - nats
       - prometheus
     ports:
-      - "8080:8080"
+      - "8080:80"
     volumes:
       # This assumes a `config.ron` file is located at the
       # root of the build context.
