@@ -89,7 +89,7 @@ mod tests {
         let transmitter = transmitter_nats::NatsPublisher::new(nats_connection.clone());
 
         // Construct scheduler.
-        let mut scheduler = scheduler::TransmissionScheduler::new(
+        let scheduler = scheduler::TransmissionScheduler::new(
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(now),
