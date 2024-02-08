@@ -240,7 +240,7 @@ mod tests {
 
     async fn test_db() -> PgPool {
         let postgres_config = postgres::Config {
-            name: "scheduler".into(),
+            name: "transmit".into(),
             host: "localhost".into(),
             port: 5432,
             user: "postgres".into(),
@@ -249,7 +249,7 @@ mod tests {
         };
         let connection = postgres::connect_to_database(postgres_config)
             .await
-            .expect("connecting to postgers failed. Is postgres running on port 5432?");
+            .expect("connecting to postgres failed. Is postgres running on port 5432?");
 
         connection
     }

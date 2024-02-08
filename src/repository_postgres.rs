@@ -190,12 +190,11 @@ mod tests {
     use super::*;
 
     use crate::postgres;
-    use tokio::time::pause;
 
     #[tokio::test]
     async fn test_store() {
         let config = postgres::Config {
-            name: "scheduler".into(),
+            name: "transmit".into(),
             host: "localhost".into(),
             port: 5432,
             user: "postgres".into(),
@@ -274,12 +273,10 @@ mod tests {
             };
         }
 
-        pause();
-
         let polled_schedules_transmitted = repository
             .poll_batch(now, 100)
             .await
-            .expect("poll batch should be ok");
+            .expect("last poll batch should be ok");
         assert_eq!(polled_schedules_transmitted, vec![]);
     }
 }

@@ -51,7 +51,7 @@ mod test {
     // accessible.
     //
     // Run with `docker run -p 4222:4222 -ti nats:latest`.
-    async fn test_transmitter() {
+    async fn test_transmitter_right_subject() {
         let nats_config = Config {
             port: 4222,
             host: "localhost".to_string(),
@@ -96,7 +96,7 @@ mod test {
             .expect("transmission should succeed");
 
         // Wait for the message to be received.
-        let timeout_duration = Duration::from_millis(5);
+        let timeout_duration = Duration::from_millis(25);
         let timeout = tokio::time::timeout(timeout_duration, async {
             // Wait until the flag is set to true (message received)
             while !*received_flag.lock().unwrap() {
@@ -104,7 +104,7 @@ mod test {
             }
         })
         .await;
-        timeout.expect("timeout reached");
+        timeout.expect("subscribe did not receive message in time; timeout reached");
 
         handle.await.expect("could not join threads");
     }

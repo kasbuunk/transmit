@@ -9,7 +9,7 @@ deps:
 
 .PHONY: unittest
 unittest:
-	cargo test --lib transmit # Unit tests.
+	cargo test --lib # Unit tests.
 
 .PHONY: teardown
 teardown:
