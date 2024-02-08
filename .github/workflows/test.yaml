@@ -1,0 +1,47 @@
+name: Rust Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      docker:
+        image: docker:stable
+        options: --privileged  # Necessary to run Docker inside Docker.
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Set up Docker Compose
+      run: |
+        docker-compose --version
+
+    - name: Install Protocol Buffers Compiler (protoc)
+      run: |
+        sudo apt update
+        sudo apt install -y protobuf-compiler
+
+    - name: Unit and integration tests
+      run: |
+        DOCKER_COMPOSE_FILE=docker-compose.yaml
+        DOCKER_COMPOSE="docker-compose -f $DOCKER_COMPOSE_FILE"
+        $DOCKER_COMPOSE up -d --build
+        cargo test --quiet --lib transmit # Unit and integration tests.
+        $DOCKER_COMPOSE down
+
+    - name: End-to-end tests
+      run: |
+        DOCKER_COMPOSE_FILE=tests/docker-compose.yaml
+        DOCKER_COMPOSE="docker-compose -f $DOCKER_COMPOSE_FILE"
+        $DOCKER_COMPOSE up -d --build
+        cargo test --quiet --test end_to_end
+        $DOCKER_COMPOSE down
