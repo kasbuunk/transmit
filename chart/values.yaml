@@ -107,3 +107,22 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+log_level: "debug"
+automigrate: true
+reset_state: false
+database:
+  name: "transmit"
+  host: "transmit-postgresql.default.svc.cluster.local"
+  port: 5432
+  user: "postgres"
+  password: "postgres"
+  ssl: false
+nats:
+  host: "transmit-nats.default.svc.cluster.local"
+  port: 4222
+grpc:
+  port: 80
+prometheus:
+  port: 9090
+  endpoint: "/"

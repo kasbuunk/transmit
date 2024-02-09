@@ -5,34 +5,34 @@ metadata:
 data:
   config-file: |-
     (
-            automigrate: true,
-            reset_state: false,
-            log_level: "debug",
+            automigrate: {{ .Values.automigrate }},
+            reset_state: {{ .Values.reset_state }},
+            log_level: "{{ .Values.log_level }}",
             metrics: Prometheus(
                     Config(
-                            port: 9090,
-                            endpoint: "/",
+                            port: {{ .Values.prometheus.port }},
+                            endpoint: "{{ .Values.prometheus.endpoint }}",
                     ),
             ),
             repository: Postgres(
                     Config(
-                            name: "transmit",
-                            host: "transmit-postgresql.<namespace>.svc.cluster.local",
-                            port: 5432,
-                            user: "postgres",
-                            password: "postgres",
-                            ssl: false,
+                            name: "{{ .Values.database.name }}",
+                            host: "{{ .Values.database.host }}",
+                            port: {{ .Values.database.port }},
+                            user: "{{ .Values.database.user }}",
+                            password: "{{ .Values.database.password }}",
+                            ssl: {{ .Values.database.ssl }},
                     ),
             ),
             transmitter: Nats(
                     Config(
-                            host: "transmit-nats.<namespace>.svc.cluster.local",
-                            port: 4222,
+                            host: "{{ .Values.nats.host }}",
+                            port: {{ .Values.nats.port }},
                     ),
             ),
             transport: Grpc(
                     Config(
-                            port: 8080,
+                            port: {{ .Values.grpc.port }},
                     ),
             ),
     )
