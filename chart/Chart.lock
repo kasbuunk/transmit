@@ -1,0 +1,12 @@
+dependencies:
+- name: nats
+  repository: https://nats-io.github.io/k8s/helm/charts/
+  version: 1.1.8
+- name: postgresql
+  repository: oci://registry-1.docker.io/bitnamicharts
+  version: 14.0.4
+- name: prometheus
+  repository: https://prometheus-community.github.io/helm-charts
+  version: 25.11.0
+digest: sha256:afde6749c92ff2dd533a55c8d4bf0ea4aa27332c5a5be071438a4eafa53729e6
+generated: "2024-02-09T21:55:42.542866+01:00"

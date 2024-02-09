@@ -17,7 +17,7 @@ data:
             repository: Postgres(
                     Config(
                             name: "transmit",
-                            host: "localhost",
+                            host: "transmit-postgresql.<namespace>.svc.cluster.local",
                             port: 5432,
                             user: "postgres",
                             password: "postgres",
@@ -26,7 +26,7 @@ data:
             ),
             transmitter: Nats(
                     Config(
-                            host: "localhost",
+                            host: "transmit-nats.<namespace>.svc.cluster.local",
                             port: 4222,
                     ),
             ),
