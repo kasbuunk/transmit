@@ -72,13 +72,15 @@ resources: {}
   #   memory: 128Mi
 
 livenessProbe:
-  httpGet:
-    path: /
-    port: http
+  grpc:
+    port: 80
+  initialDelaySeconds: 15
+  periodSeconds: 10
 readinessProbe:
-  httpGet:
-    path: /
-    port: http
+  grpc:
+    port: 80
+  initialDelaySeconds: 15
+  periodSeconds: 10
 
 autoscaling:
   enabled: false

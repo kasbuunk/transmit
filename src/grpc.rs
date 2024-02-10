@@ -18,14 +18,19 @@ use crate::model::*;
 pub mod proto {
     tonic::include_proto!("scheduler");
 }
+use proto::health_server::HealthServer;
 use proto::scheduler_server::SchedulerServer;
+use proto::{HealthCheckRequest, HealthCheckResponse};
 use proto::{ScheduleMessageRequest, ScheduleMessageResponse};
 
-#[derive(Debug, Deserialize)]
+use self::proto::health_check_response::ServingStatus;
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     pub port: u16,
 }
 
+#[derive(Clone)]
 pub struct GrpcServer {
     config: Config,
     scheduler: Arc<dyn Scheduler + Send + Sync>,
@@ -36,14 +41,17 @@ impl GrpcServer {
         GrpcServer { config, scheduler }
     }
 
-    pub async fn serve(self, cancel_token: CancellationToken) -> Result<(), Box<dyn Error>> {
+    pub async fn serve(&self, cancel_token: CancellationToken) -> Result<(), Box<dyn Error>> {
         let host = "0.0.0.0";
         let address = format!("{}:{}", host, self.config.port).parse()?;
-        let scheduler_server = SchedulerServer::new(self);
+        let scheduler_server = SchedulerServer::new(self.clone());
+        let health_server = HealthServer::new(self.clone());
 
         info!("Start listening for incoming messages at {}.", address);
 
-        let server = Server::builder().add_service(scheduler_server);
+        let server = Server::builder()
+            .add_service(health_server)
+            .add_service(scheduler_server);
 
         // Create a signal channel for graceful shutdown.
         let (shutdown_sender, shutdown_receiver) = tokio::sync::oneshot::channel::<()>();
@@ -134,6 +142,35 @@ impl proto::scheduler_server::Scheduler for GrpcServer {
                 Err(Status::internal("internal server error"))
             }
         }
+    }
+}
+
+#[tonic::async_trait]
+impl proto::health_server::Health for GrpcServer {
+    type WatchStream = tonic::Streaming<HealthCheckResponse>;
+
+    async fn check(
+        &self,
+        request: tonic::Request<HealthCheckRequest>,
+    ) -> Result<tonic::Response<HealthCheckResponse>, tonic::Status> {
+        // Implement the logic to check the health status of the specified service
+        let request_service_name = request.into_inner().service;
+        // Here you should check if the service is healthy and return the appropriate status
+        let serving_status = ServingStatus::Serving; // Or NOT_SERVING based on your logic
+
+        Ok(tonic::Response::new(HealthCheckResponse {
+            status: serving_status.into(),
+        }))
+    }
+
+    async fn watch(
+        &self,
+        request: tonic::Request<HealthCheckRequest>,
+    ) -> Result<tonic::Response<Self::WatchStream>, tonic::Status> {
+        // Implement the logic to watch the health status of the specified service
+        // Here you should return a stream that notifies the client whenever the service's health status changes
+        // This could be implemented using tokio::sync::watch or any other suitable mechanism
+        unimplemented!()
     }
 }
 
