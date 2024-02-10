@@ -41,15 +41,29 @@ mod tests {
         // Subscribe to test subject, to assert transmissions.
         let subject = "ENDTOEND.schedule_message";
 
-        // Construct the grpc request, containing a schedule and message.
-        let message_schedule_request =
-            new_message_schedule(subject.to_string(), transmit_after_seconds);
-        let grpc_request = tonic::Request::new(message_schedule_request);
-
         // Schedule a message with delayed(transmit_after_30s).
         let grpc_port = 8080;
         let host = "localhost";
         let address = format!("http://{}:{}", host, grpc_port);
+
+        // Check health.
+        let mut health_grpc_client =
+            grpc::proto::health_client::HealthClient::connect(address.clone())
+                .await
+                .expect(&format!(
+                    "failed to connect to grpc server on address {}",
+                    &address
+                ));
+        let service = "scheduler".to_string();
+        let health_check_request = tonic::Request::new(grpc::proto::HealthCheckRequest { service });
+        let response = health_grpc_client
+            .check(health_check_request)
+            .await
+            .expect("health should be ok");
+        assert_eq!(
+            response.into_inner().status(),
+            grpc::proto::health_check_response::ServingStatus::Serving
+        );
 
         // Connect to serer.
         let mut grpc_client =
@@ -59,6 +73,12 @@ mod tests {
                     "failed to connect to grpc server on address {}",
                     &address
                 ));
+
+        // Construct the grpc request, containing a schedule and message.
+        let message_schedule_request =
+            new_message_schedule(subject.to_string(), transmit_after_seconds);
+        let grpc_request = tonic::Request::new(message_schedule_request);
+
         // Do the request.
         let response = grpc_client
             .schedule_message(grpc_request)
