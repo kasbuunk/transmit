@@ -154,7 +154,7 @@ impl proto::health_server::Health for GrpcServer {
         request: tonic::Request<HealthCheckRequest>,
     ) -> Result<tonic::Response<HealthCheckResponse>, tonic::Status> {
         // Implement the logic to check the health status of the specified service
-        let request_service_name = request.into_inner().service;
+        let _request_service_name = request.into_inner().service;
         // Here you should check if the service is healthy and return the appropriate status
         let serving_status = ServingStatus::Serving; // Or NOT_SERVING based on your logic
 
@@ -165,7 +165,7 @@ impl proto::health_server::Health for GrpcServer {
 
     async fn watch(
         &self,
-        request: tonic::Request<HealthCheckRequest>,
+        _request: tonic::Request<HealthCheckRequest>,
     ) -> Result<tonic::Response<Self::WatchStream>, tonic::Status> {
         // Implement the logic to watch the health status of the specified service
         // Here you should return a stream that notifies the client whenever the service's health status changes
