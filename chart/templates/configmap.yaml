@@ -10,8 +10,8 @@ data:
             log_level: "{{ .Values.log_level }}",
             metrics: Prometheus(
                     Config(
-                            port: {{ .Values.prometheus.port }},
-                            endpoint: "{{ .Values.prometheus.endpoint }}",
+                            port: {{ .Values.metrics.port }},
+                            endpoint: "{{ .Values.metrics.endpoint }}",
                     ),
             ),
             repository: Postgres(
