@@ -1,0 +1,21 @@
+image:
+  tag: "dev"
+log_level: "debug"
+automigrate: true
+reset_state: false
+database:
+  name: "transmit"
+  host: "postgresql.default.svc.cluster.local"
+  port: 5432
+  user: "postgres"
+  password: "postgres"
+  ssl: false
+nats:
+  host: "nats.default.svc.cluster.local"
+  port: 4222
+grpc:
+  port: 80
+metrics:
+  port: 9090
+  endpoint: "/"
+
