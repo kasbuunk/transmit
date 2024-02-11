@@ -12,7 +12,6 @@ spec:
       protocol: TCP
       name: http
     - port: {{ .Values.metrics.port }}
-      targetPort: http
       protocol: TCP
       name: metrics
   selector:
