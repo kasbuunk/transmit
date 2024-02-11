@@ -2,7 +2,7 @@ use std::error::Error;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use log::info;
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use sqlx::postgres::PgPool;
@@ -75,7 +75,7 @@ INSERT INTO message_schedule (
         before: DateTime<Utc>,
         batch_size: u32,
     ) -> Result<Vec<MessageSchedule>, Box<dyn Error>> {
-        info!("polling batch");
+        debug!("polling batch");
         let message_schedules_sql = sqlx::query_as!(
             MessageScheduleSql,
             "

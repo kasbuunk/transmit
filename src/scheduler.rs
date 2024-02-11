@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use async_trait::async_trait;
-use log::{error, info, warn};
+use log::{error, info, trace, warn};
 #[cfg(test)]
 use mockall::predicate::*;
 use uuid::Uuid;
@@ -100,7 +100,7 @@ impl TransmissionScheduler {
             }
         };
 
-        info!("Polled {} schedules to transmit", schedules.len());
+        trace!("Polled {} schedules to transmit", schedules.len());
 
         let relevant_schedules: Vec<MessageSchedule> = schedules
             .clone()
