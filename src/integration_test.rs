@@ -23,8 +23,8 @@ mod tests {
     // To monitor the transmitted messages, run nats via docker with:
     // `docker run -p 4222:4222 -ti nats:latest`
     // And observe live with:
-    // `nats sub -s "nats://localhost:4222" INTEGRATION.schedule_message`
-    async fn schedule_message() {
+    // `nats sub -s "nats://localhost:4222" INTEGRATION.schedule_transmission`
+    async fn schedule_transmission() {
         let timestamp_now = Utc::now();
         let ten_seconds_later = timestamp_now + Duration::seconds(10);
         let transmit_after_30s = timestamp_now + Duration::seconds(30);
@@ -97,7 +97,7 @@ mod tests {
         );
 
         // Subscribe to test subject, to assert transmissions.
-        let subject = "INTEGRATION.schedule_message";
+        let subject = "INTEGRATION.schedule_transmission";
 
         // Assert no transmission just yet.
         let flag_first_listening = Arc::new(Mutex::new(false));
@@ -109,9 +109,9 @@ mod tests {
         .await;
 
         // Construct the grpc request, containing a schedule and message.
-        let message_schedule_request =
-            new_message_schedule(subject.to_string(), transmit_after_30s);
-        let grpc_request = tonic::Request::new(message_schedule_request);
+        let schedule_transmission_request =
+            new_transmission(subject.to_string(), transmit_after_30s);
+        let grpc_request = tonic::Request::new(schedule_transmission_request);
 
         // Schedule a message with delayed(transmit_after_30s).
         let scheduler_arc = Arc::new(scheduler.clone());
@@ -134,10 +134,10 @@ mod tests {
             .expect("failed to connect to grpc server");
         // Do the request.
         let response = grpc_client
-            .schedule_message(grpc_request)
+            .schedule_transmission(grpc_request)
             .await
             .expect("grpc server should handle request");
-        let _ = uuid::Uuid::parse_str(&response.into_inner().schedule_entry_id)
+        let _ = uuid::Uuid::parse_str(&response.into_inner().transmission_id)
             .expect("response should contain uuid");
 
         // Invoke poll-transmit (second: ten_seconds_later), assert nothing happened.
@@ -198,25 +198,25 @@ mod tests {
         assert!(timeout_reached.is_err());
     }
 
-    fn new_message_schedule(
+    fn new_transmission(
         subject: String,
         timestamp: DateTime<Utc>,
-    ) -> grpc::proto::ScheduleMessageRequest {
+    ) -> grpc::proto::ScheduleTransmissionRequest {
         let delayed = grpc::proto::Delayed {
             transmit_at: Some(std::time::SystemTime::from(timestamp).into()),
         };
-        let schedule = grpc::proto::schedule_message_request::Schedule::Delayed(delayed);
+        let schedule = grpc::proto::schedule_transmission_request::Schedule::Delayed(delayed);
         let nats_event = grpc::proto::NatsEvent {
             subject: subject.to_string(),
             payload: "Integration test payload.".into(),
         };
-        let message = grpc::proto::schedule_message_request::Message::NatsEvent(nats_event);
-        let schedule_message_request = grpc::proto::ScheduleMessageRequest {
+        let message = grpc::proto::schedule_transmission_request::Message::NatsEvent(nats_event);
+        let schedule_transmission_request = grpc::proto::ScheduleTransmissionRequest {
             schedule: Some(schedule),
             message: Some(message),
         };
 
-        schedule_message_request
+        schedule_transmission_request
     }
 
     async fn listen_for_transmission(

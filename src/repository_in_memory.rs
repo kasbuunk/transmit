@@ -9,53 +9,53 @@ use crate::contract::Repository;
 use crate::model::*;
 
 pub struct RepositoryInMemory {
-    schedules: Arc<Mutex<Vec<MessageSchedule>>>,
+    transmissions: Arc<Mutex<Vec<Transmission>>>,
 }
 
 impl RepositoryInMemory {
     pub fn new() -> RepositoryInMemory {
         RepositoryInMemory {
-            schedules: Arc::new(Mutex::new(vec![])),
+            transmissions: Arc::new(Mutex::new(vec![])),
         }
     }
 }
 
 #[async_trait]
 impl Repository for RepositoryInMemory {
-    async fn store_schedule(
+    async fn store_transmission(
         &self,
-        schedule: &MessageSchedule,
+        transmission: &Transmission,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        self.schedules
+        self.transmissions
             .lock()
             .expect("mutex is poisoned")
-            .push(schedule.clone());
+            .push(transmission.clone());
 
         Ok(())
     }
 
-    async fn poll_batch(
+    async fn poll_transmissions(
         &self,
         before: DateTime<Utc>,
         batch_size: u32,
-    ) -> Result<Vec<MessageSchedule>, Box<dyn Error>> {
+    ) -> Result<Vec<Transmission>, Box<dyn Error>> {
         Ok(self
-            .schedules
+            .transmissions
             .clone()
             .lock()
             .expect("mutex is poisoned")
             .iter()
-            .filter(|schedule| match schedule.next {
+            .filter(|transmission| match transmission.next {
                 None => false,
                 Some(next) => next <= before,
             })
-            .map(|schedule_ref| schedule_ref.clone())
+            .map(|transmission_reference| transmission_reference.clone())
             .take(batch_size as usize)
             .collect())
     }
 
-    async fn save(&self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error + Send + Sync>> {
-        for stored_schedule in self.schedules.lock().unwrap().iter_mut() {
+    async fn save(&self, schedule: &Transmission) -> Result<(), Box<dyn Error + Send + Sync>> {
+        for stored_schedule in self.transmissions.lock().unwrap().iter_mut() {
             if stored_schedule.id == schedule.id {
                 *stored_schedule = schedule.clone();
             }
@@ -87,53 +87,53 @@ mod tests {
         let past = now - chrono::Duration::milliseconds(100);
         let future = now + chrono::Duration::milliseconds(100);
 
-        let polled_schedules_empty = repository
-            .poll_batch(Utc::now(), 100)
+        let polled_transmissions_empty = repository
+            .poll_transmissions(Utc::now(), 100)
             .await
             .expect("poll batch should be ok");
-        assert_eq!(polled_schedules_empty.len(), 0);
+        assert_eq!(polled_transmissions_empty.len(), 0);
 
-        let schedules = vec![
-            MessageSchedule::new(
-                SchedulePattern::Delayed(Delayed::new(past)),
+        let transmissions = vec![
+            Transmission::new(
+                Schedule::Delayed(Delayed::new(past)),
                 Message::NatsEvent(NatsEvent::new(
                     "ARBITRARY.subject".into(),
                     "arbitrary payload".into(),
                 )),
             ),
-            MessageSchedule::new(
-                SchedulePattern::Delayed(Delayed::new(future)),
+            Transmission::new(
+                Schedule::Delayed(Delayed::new(future)),
                 Message::NatsEvent(NatsEvent::new(
                     "ARBITRARY.subject".into(),
                     "arbitrary payload".into(),
                 )),
             ),
         ];
-        let expected_polled_schedules: Vec<MessageSchedule> = vec![MessageSchedule {
-            id: schedules[0].id.clone(),
-            schedule_pattern: SchedulePattern::Delayed(Delayed::new(past)),
-            message: schedules[0].message.clone(),
+        let expected_polled_transmissions: Vec<Transmission> = vec![Transmission {
+            id: transmissions[0].id.clone(),
+            schedule: Schedule::Delayed(Delayed::new(past)),
+            message: transmissions[0].message.clone(),
             next: Some(past),
             transmission_count: 0,
         }];
 
-        for schedule in schedules.iter() {
+        for transmission in transmissions.iter() {
             repository
-                .store_schedule(schedule)
+                .store_transmission(transmission)
                 .await
-                .expect("store schedule should be ok");
+                .expect("store transmission should be ok");
         }
 
-        let polled_schedules = repository
-            .poll_batch(now, 100)
+        let polled_transmissions = repository
+            .poll_transmissions(now, 100)
             .await
             .expect("poll batch should be ok");
-        assert_eq!(polled_schedules, expected_polled_schedules);
+        assert_eq!(polled_transmissions, expected_polled_transmissions);
 
-        for schedule in schedules.iter() {
-            let transmitted_message = schedule.transmitted();
+        for transmission in transmissions.iter() {
+            let transmitted_message = transmission.transmitted();
             match transmitted_message {
-                Ok(schedule) => match repository.save(&schedule).await {
+                Ok(transmission) => match repository.save(&transmission).await {
                     Ok(()) => (),
                     Err(err) => panic!("failed to save: {err}"),
                 },
@@ -143,10 +143,10 @@ mod tests {
 
         pause();
 
-        let polled_schedules_transmitted = repository
-            .poll_batch(Utc::now(), 100)
+        let polled_transmissions_transmitted = repository
+            .poll_transmissions(Utc::now(), 100)
             .await
             .expect("poll batch should be ok");
-        assert_eq!(polled_schedules_transmitted, vec![]);
+        assert_eq!(polled_transmissions_transmitted, vec![]);
     }
 }

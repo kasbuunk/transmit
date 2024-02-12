@@ -21,7 +21,7 @@ pub mod proto {
 use proto::health_server::HealthServer;
 use proto::scheduler_server::SchedulerServer;
 use proto::{HealthCheckRequest, HealthCheckResponse};
-use proto::{ScheduleMessageRequest, ScheduleMessageResponse};
+use proto::{ScheduleTransmissionRequest, ScheduleTransmissionResponse};
 
 use self::proto::health_check_response::ServingStatus;
 
@@ -79,10 +79,10 @@ impl GrpcServer {
 
 #[tonic::async_trait]
 impl proto::scheduler_server::Scheduler for GrpcServer {
-    async fn schedule_message(
+    async fn schedule_transmission(
         &self,
-        request: Request<ScheduleMessageRequest>,
-    ) -> Result<Response<ScheduleMessageResponse>, Status> {
+        request: Request<ScheduleTransmissionRequest>,
+    ) -> Result<Response<ScheduleTransmissionResponse>, Status> {
         info!("ScheduleMessage request received");
 
         let request_data = request.into_inner();
@@ -91,7 +91,7 @@ impl proto::scheduler_server::Scheduler for GrpcServer {
             Some(schedule) => schedule,
         };
         let schedule = match schedule_proto {
-            proto::schedule_message_request::Schedule::Delayed(delayed) => {
+            proto::schedule_transmission_request::Schedule::Delayed(delayed) => {
                 let timestamp = match delayed.transmit_at {
                     None => {
                         return Err(Status::invalid_argument("delayed.transmit_at is required"))
@@ -110,7 +110,7 @@ impl proto::scheduler_server::Scheduler for GrpcServer {
                 };
                 let timestamp_utc = DateTime::<Utc>::from(system_time);
 
-                SchedulePattern::Delayed(Delayed::new(timestamp_utc))
+                Schedule::Delayed(Delayed::new(timestamp_utc))
             }
         };
         let message_proto = match request_data.message {
@@ -118,7 +118,7 @@ impl proto::scheduler_server::Scheduler for GrpcServer {
             Some(message) => message,
         };
         let message = match message_proto {
-            proto::schedule_message_request::Message::NatsEvent(event) => {
+            proto::schedule_transmission_request::Message::NatsEvent(event) => {
                 let subject = event.subject;
                 let payload = event.payload;
                 Message::NatsEvent(NatsEvent {
@@ -132,8 +132,8 @@ impl proto::scheduler_server::Scheduler for GrpcServer {
             Ok(id) => {
                 info!("Scheduled message: {id}");
 
-                Ok(Response::new(ScheduleMessageResponse {
-                    schedule_entry_id: id.to_string(),
+                Ok(Response::new(ScheduleTransmissionResponse {
+                    transmission_id: id.to_string(),
                 }))
             }
             Err(err) => {
@@ -185,7 +185,7 @@ mod tests {
     use crate::grpc::proto::scheduler_server::Scheduler;
 
     #[tokio::test]
-    async fn test_schedule_message() {
+    async fn test_schedule_transmission() {
         let expected_id = uuid::uuid!("a23bfa0f-a906-429a-ab90-66322dfa72e5");
         let id_clone = expected_id.clone();
         let mut scheduler = MockScheduler::new();
@@ -194,7 +194,7 @@ mod tests {
         let event_payload = Bytes::from("some_payload");
 
         let now = Utc::now();
-        let schedule = SchedulePattern::Delayed(Delayed::new(now));
+        let schedule = Schedule::Delayed(Delayed::new(now));
         let message = Message::NatsEvent(NatsEvent::new(
             event_subject.clone(),
             event_payload.clone().into(),
@@ -209,13 +209,13 @@ mod tests {
         let config = Config { port: 8081 };
         let grpc_server = GrpcServer::new(config, Arc::new(scheduler));
 
-        let request = ScheduleMessageRequest {
-            schedule: Some(proto::schedule_message_request::Schedule::Delayed(
+        let request = ScheduleTransmissionRequest {
+            schedule: Some(proto::schedule_transmission_request::Schedule::Delayed(
                 proto::Delayed {
                     transmit_at: Some(std::time::SystemTime::from(now).into()),
                 },
             )),
-            message: Some(proto::schedule_message_request::Message::NatsEvent(
+            message: Some(proto::schedule_transmission_request::Message::NatsEvent(
                 proto::NatsEvent {
                     subject: event_subject,
                     payload: event_payload.into(),
@@ -224,12 +224,12 @@ mod tests {
         };
 
         let response = grpc_server
-            .schedule_message(tonic::Request::new(request))
+            .schedule_transmission(tonic::Request::new(request))
             .await
             .expect("unexpected failure");
 
         assert_eq!(
-            response.into_inner().schedule_entry_id,
+            response.into_inner().transmission_id,
             expected_id.to_string()
         );
     }

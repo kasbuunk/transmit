@@ -13,8 +13,8 @@ mod tests {
     // To monitor the transmitted messages, run nats via docker with:
     // `docker run -p 4222:4222 -ti nats:latest`
     // And observe live with:
-    // `nats sub -s "nats://localhost:4222" INTEGRATION.schedule_message`
-    async fn schedule_message() {
+    // `nats sub -s "nats://localhost:4222" INTEGRATION.schedule_transmission`
+    async fn schedule_transmission() {
         let timestamp_now = Utc::now();
         let transmit_after_seconds = timestamp_now + Duration::milliseconds(800); // Initialise nats connection.
         let nats_connection = nats::connect_to_nats(nats::Config {
@@ -27,7 +27,7 @@ mod tests {
         .expect("could not connect to nats on port 4222");
 
         // Subscribe to test subject, to assert transmissions.
-        let subject = "ENDTOEND.schedule_message";
+        let subject = "ENDTOEND.schedule_transmission";
 
         // Schedule a message with delayed(transmit_after_30s).
         let grpc_port = 8080;
@@ -69,10 +69,10 @@ mod tests {
 
         // Do the request.
         let response = grpc_client
-            .schedule_message(grpc_request)
+            .schedule_transmission(grpc_request)
             .await
             .expect("grpc server should handle request");
-        let _ = uuid::Uuid::parse_str(&response.into_inner().schedule_entry_id)
+        let _ = uuid::Uuid::parse_str(&response.into_inner().transmission_id)
             .expect("response should contain a valid uuid");
 
         // Invoke poll-transmit (second: ten_seconds_later), assert nothing happened.
@@ -136,22 +136,22 @@ mod tests {
     fn new_message_schedule(
         subject: String,
         timestamp: DateTime<Utc>,
-    ) -> grpc::proto::ScheduleMessageRequest {
+    ) -> grpc::proto::ScheduleTransmissionRequest {
         let delayed = grpc::proto::Delayed {
             transmit_at: Some(std::time::SystemTime::from(timestamp).into()),
         };
-        let schedule = grpc::proto::schedule_message_request::Schedule::Delayed(delayed);
+        let schedule = grpc::proto::schedule_transmission_request::Schedule::Delayed(delayed);
         let nats_event = grpc::proto::NatsEvent {
             subject: subject.to_string(),
             payload: "Integration test payload.".into(),
         };
-        let message = grpc::proto::schedule_message_request::Message::NatsEvent(nats_event);
-        let schedule_message_request = grpc::proto::ScheduleMessageRequest {
+        let message = grpc::proto::schedule_transmission_request::Message::NatsEvent(nats_event);
+        let schedule_transmission_request = grpc::proto::ScheduleTransmissionRequest {
             schedule: Some(schedule),
             message: Some(message),
         };
 
-        schedule_message_request
+        schedule_transmission_request
     }
 
     async fn listen_for_transmission(

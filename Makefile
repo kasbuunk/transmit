@@ -20,7 +20,7 @@ test: setup unittest teardown
 
 .PHONY: run
 run: setup
-	cargo run
+	POSTGRES_PASSWORD=postgres cargo run
 
 .PHONY: e2esetup
 e2esetup:

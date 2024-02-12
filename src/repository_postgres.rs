@@ -17,13 +17,13 @@ pub struct RepositoryPostgres {
 
 impl RepositoryPostgres {
     pub fn new(conn: PgPool) -> RepositoryPostgres {
-        info!("Constructing new repository.");
+        info!("constructing new repository");
 
         RepositoryPostgres { conn }
     }
 
     pub async fn migrate(&self) -> Result<(), sqlx::Error> {
-        info!("Running migrations.");
+        info!("migrating");
 
         sqlx::migrate!().run(&self.conn).await?;
 
@@ -31,8 +31,9 @@ impl RepositoryPostgres {
     }
 
     pub async fn clear_all(&self) -> Result<(), Box<dyn Error>> {
-        info!("deleting all message schedules");
-        let _ = sqlx::query!("delete from message_schedule;")
+        info!("deleting all transmissions");
+
+        let _ = sqlx::query!("delete from transmission;")
             .execute(&self.conn)
             .await?;
 
@@ -42,18 +43,18 @@ impl RepositoryPostgres {
 
 #[async_trait]
 impl Repository for RepositoryPostgres {
-    async fn store_schedule(
+    async fn store_transmission(
         &self,
-        schedule: &MessageSchedule,
+        schedule: &Transmission,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        info!("storing schedule");
+        info!("storing transmission");
 
-        let schedule_sql = MessageScheduleSql::from(schedule);
+        let schedule_sql = TransmissionSql::from(schedule);
 
         let _ = sqlx::query!(
             "
-INSERT INTO message_schedule (
-    id, message, next, schedule_pattern, transmission_count, inserted_at, is_locked
+INSERT INTO transmission (
+    id, message, next, schedule, transmission_count, inserted_at, is_locked
 ) VALUES (
     $1, $2, $3, $4, $5, now(), false
 );
@@ -61,7 +62,7 @@ INSERT INTO message_schedule (
             schedule_sql.id,
             schedule_sql.message,
             schedule_sql.next,
-            schedule_sql.schedule_pattern,
+            schedule_sql.schedule,
             schedule_sql.transmission_count as i32,
         )
         .execute(&self.conn)
@@ -70,23 +71,23 @@ INSERT INTO message_schedule (
         Ok(())
     }
 
-    async fn poll_batch(
+    async fn poll_transmissions(
         &self,
         before: DateTime<Utc>,
         batch_size: u32,
-    ) -> Result<Vec<MessageSchedule>, Box<dyn Error>> {
+    ) -> Result<Vec<Transmission>, Box<dyn Error>> {
         debug!("polling batch");
         let message_schedules_sql = sqlx::query_as!(
-            MessageScheduleSql,
+            TransmissionSql,
             "
 WITH locked_schedules AS (
-    UPDATE message_schedule
+    UPDATE transmission
     SET is_locked = true
     WHERE id IN (
         SELECT id
         FROM (
             SELECT id, MAX(inserted_at) AS latest_inserted_at
-            FROM message_schedule
+            FROM transmission
             GROUP BY id
         ) latest_entries
         WHERE inserted_at = latest_inserted_at
@@ -94,7 +95,7 @@ WITH locked_schedules AS (
     AND next IS NOT NULL
     AND next < $1
     AND is_locked = false
-    RETURNING id, message, next, schedule_pattern, transmission_count
+    RETURNING id, message, next, schedule, transmission_count
 )
 SELECT * FROM locked_schedules
 LIMIT $2;
@@ -105,38 +106,38 @@ LIMIT $2;
         .fetch_all(&self.conn)
         .await?;
 
-        let message_schedules: Vec<MessageSchedule> = message_schedules_sql
+        let message_schedules: Vec<Transmission> = message_schedules_sql
             .iter()
-            .map(|message_schedule_sql| MessageSchedule::from((*message_schedule_sql).clone()))
+            .map(|message_schedule_sql| Transmission::from((*message_schedule_sql).clone()))
             .collect();
 
         Ok(message_schedules)
     }
 
-    async fn save(&self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error + Send + Sync>> {
-        self.store_schedule(schedule).await
+    async fn save(&self, schedule: &Transmission) -> Result<(), Box<dyn Error + Send + Sync>> {
+        self.store_transmission(schedule).await
     }
 
     async fn reschedule(
         &self,
-        schedule_id: &uuid::Uuid,
+        transmission_id: &uuid::Uuid,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let _ = sqlx::query!(
             "
-UPDATE message_schedule
+UPDATE transmission
 SET is_locked = true
 WHERE id = $1
   AND is_locked = false
   AND (id, inserted_at) = (
     SELECT id, MAX(inserted_at)
-    FROM message_schedule
+    FROM transmission
     WHERE id = $2
       AND is_locked = false
     GROUP BY id
   );
         ",
-            schedule_id,
-            schedule_id,
+            transmission_id,
+            transmission_id,
         )
         .execute(&self.conn)
         .await?;
@@ -146,37 +147,37 @@ WHERE id = $1
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
-struct MessageScheduleSql {
+struct TransmissionSql {
     id: Uuid,
     message: String,
-    schedule_pattern: String,
+    schedule: String,
     next: Option<DateTime<Utc>>,
     transmission_count: i32,
 }
 
-impl From<&MessageSchedule> for MessageScheduleSql {
-    fn from(schedule: &MessageSchedule) -> MessageScheduleSql {
-        MessageScheduleSql {
+impl From<&Transmission> for TransmissionSql {
+    fn from(schedule: &Transmission) -> TransmissionSql {
+        TransmissionSql {
             id: schedule.id,
             message: serde_json::to_string(&schedule.message).expect("Failed to serialize message"),
-            schedule_pattern: serde_json::to_string(&schedule.schedule_pattern)
-                .expect("Failed to serialize schedule pattern"),
+            schedule: serde_json::to_string(&schedule.schedule)
+                .expect("Failed to serialize schedule"),
             transmission_count: schedule.transmission_count as i32,
             next: schedule.next,
         }
     }
 }
 
-impl From<MessageScheduleSql> for MessageSchedule {
-    fn from(schedule_sql: MessageScheduleSql) -> MessageSchedule {
-        MessageSchedule {
+impl From<TransmissionSql> for Transmission {
+    fn from(schedule_sql: TransmissionSql) -> Transmission {
+        Transmission {
             id: schedule_sql.id,
-            schedule_pattern: match serde_json::from_str(&schedule_sql.schedule_pattern) {
-                Ok(pattern) => pattern,
-                Err(err) => panic!("Failed to deserialize schedule pattern: {:?}", err),
+            schedule: match serde_json::from_str(&schedule_sql.schedule) {
+                Ok(schedule) => schedule,
+                Err(err) => panic!("Failed to deserialize schedule: {:?}", err),
             },
             message: match serde_json::from_str(&schedule_sql.message) {
-                Ok(msg) => msg,
+                Ok(message) => message,
                 Err(err) => panic!("Failed to deserialize message: {:?}", err),
             },
             transmission_count: schedule_sql.transmission_count as u32,
@@ -203,7 +204,7 @@ mod tests {
         };
         let connection = postgres::connect_to_database(config)
             .await
-            .expect("connecting to postgers failed. Is postgres running on port 5432?");
+            .expect("connecting to postgres failed. Is postgres running on port 5432?");
 
         let repository = RepositoryPostgres::new(connection);
         repository
@@ -217,30 +218,30 @@ mod tests {
         let future = now + chrono::Duration::milliseconds(100);
 
         let polled_schedules_empty = repository
-            .poll_batch(now, 100)
+            .poll_transmissions(now, 100)
             .await
             .expect("poll batch should be ok");
         assert_eq!(polled_schedules_empty.len(), 0);
 
         let schedules = vec![
-            MessageSchedule::new(
-                SchedulePattern::Delayed(Delayed::new(past)),
+            Transmission::new(
+                Schedule::Delayed(Delayed::new(past)),
                 Message::NatsEvent(NatsEvent::new(
                     "ARBITRARY.subject".into(),
                     "first payload".into(),
                 )),
             ),
-            MessageSchedule::new(
-                SchedulePattern::Delayed(Delayed::new(future)),
+            Transmission::new(
+                Schedule::Delayed(Delayed::new(future)),
                 Message::NatsEvent(NatsEvent::new(
                     "ARBITRARY.subject".into(),
                     "second payload".into(),
                 )),
             ),
         ];
-        let expected_polled_schedules: Vec<MessageSchedule> = vec![MessageSchedule {
+        let expected_polled_schedules: Vec<Transmission> = vec![Transmission {
             id: schedules[0].id.clone(),
-            schedule_pattern: SchedulePattern::Delayed(Delayed::new(past)),
+            schedule: Schedule::Delayed(Delayed::new(past)),
             message: schedules[0].message.clone(),
             next: Some(past),
             transmission_count: 0,
@@ -248,13 +249,13 @@ mod tests {
 
         for schedule in schedules.iter() {
             repository
-                .store_schedule(schedule)
+                .store_transmission(schedule)
                 .await
                 .expect("store schedule should be ok");
         }
 
         let polled_schedules = repository
-            .poll_batch(now, 100)
+            .poll_transmissions(now, 100)
             .await
             .expect("poll batch should be ok");
         assert_eq!(polled_schedules, expected_polled_schedules);
@@ -274,7 +275,7 @@ mod tests {
         }
 
         let polled_schedules_transmitted = repository
-            .poll_batch(now, 100)
+            .poll_transmissions(now, 100)
             .await
             .expect("last poll batch should be ok");
         assert_eq!(polled_schedules_transmitted, vec![]);

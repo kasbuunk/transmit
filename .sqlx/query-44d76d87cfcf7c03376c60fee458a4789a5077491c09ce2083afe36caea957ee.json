@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nUPDATE transmission\nSET is_locked = true\nWHERE id = $1\n  AND is_locked = false\n  AND (id, inserted_at) = (\n    SELECT id, MAX(inserted_at)\n    FROM transmission\n    WHERE id = $2\n      AND is_locked = false\n    GROUP BY id\n  );\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "44d76d87cfcf7c03376c60fee458a4789a5077491c09ce2083afe36caea957ee"
+}

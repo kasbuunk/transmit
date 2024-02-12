@@ -9,14 +9,14 @@ use mockall::predicate::*;
 use uuid::Uuid;
 
 use crate::contract::{Metrics, Now, Repository, Scheduler, Transmitter};
-use crate::model::{Message, MessageSchedule, MetricEvent, SchedulePattern};
+use crate::model::{Message, MetricEvent, Schedule, Transmission};
 
 static BATCH_SIZE: u32 = 100;
 
 #[derive(Clone)]
 pub struct TransmissionScheduler {
     // repository keeps the program stateless, by providing a storage interface to store and
-    // retrieve message schedules.
+    // retrieve transmissions.
     repository: Arc<dyn Repository>,
     // transmitter sends the message according to the configured communication protocol.
     transmitter: Arc<dyn Transmitter>,
@@ -28,9 +28,9 @@ pub struct TransmissionScheduler {
 
 #[async_trait]
 impl Scheduler for TransmissionScheduler {
-    async fn schedule(&self, when: SchedulePattern, what: Message) -> Result<Uuid, Box<dyn Error>> {
-        let schedule = MessageSchedule::new(when, what);
-        match self.repository.store_schedule(&schedule).await {
+    async fn schedule(&self, when: Schedule, what: Message) -> Result<Uuid, Box<dyn Error>> {
+        let schedule = Transmission::new(when, what);
+        match self.repository.store_transmission(&schedule).await {
             Ok(_) => {
                 self.metrics.count(MetricEvent::Scheduled(true));
                 Ok(schedule.id)
@@ -89,7 +89,7 @@ impl TransmissionScheduler {
     pub async fn process_batch(&self) -> Result<(), Box<dyn Error>> {
         let now = self.now.now();
 
-        let schedules = match self.repository.poll_batch(now, BATCH_SIZE).await {
+        let schedules = match self.repository.poll_transmissions(now, BATCH_SIZE).await {
             Ok(schedules) => {
                 self.metrics.count(MetricEvent::Polled(true));
                 schedules
@@ -102,11 +102,11 @@ impl TransmissionScheduler {
 
         trace!("Polled {} schedules to transmit", schedules.len());
 
-        let relevant_schedules: Vec<MessageSchedule> = schedules
+        let relevant_schedules: Vec<Transmission> = schedules
             .clone()
             .into_iter()
             .filter(
-                |schedule| match schedule.schedule_pattern.next(schedule.transmission_count) {
+                |schedule| match schedule.schedule.next(schedule.transmission_count) {
                     None => false,
                     Some(next_datetime) => next_datetime <= now,
                 },
@@ -128,10 +128,7 @@ impl TransmissionScheduler {
         Ok(())
     }
 
-    async fn transmit(
-        &self,
-        schedule: &MessageSchedule,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn transmit(&self, schedule: &Transmission) -> Result<(), Box<dyn Error + Send + Sync>> {
         let transmission_result = self.transmitter.transmit(schedule.message.clone()).await;
 
         info!("Transmitted message from schedule with id: {}", schedule.id);
@@ -205,8 +202,8 @@ mod tests {
 
         let test_cases = vec![
             vec![],
-            vec![MessageSchedule::new(
-                SchedulePattern::Interval(Interval::new(
+            vec![Transmission::new(
+                Schedule::Interval(Interval::new(
                     timestamp_now + bit_later,
                     interval,
                     Repeat::Times(repetitions),
@@ -216,8 +213,8 @@ mod tests {
                     "arbitrary payload".into(),
                 )),
             )],
-            vec![MessageSchedule::new(
-                SchedulePattern::Interval(Interval::new(
+            vec![Transmission::new(
+                Schedule::Interval(Interval::new(
                     DateTime::<Utc>::MAX_UTC,
                     interval,
                     Repeat::Times(repetitions),
@@ -238,7 +235,7 @@ mod tests {
             let schedules = test_case_schedules.clone();
             let mut repository = MockRepository::new();
             repository
-                .expect_poll_batch()
+                .expect_poll_transmissions()
                 .times(1)
                 .returning(move |_, _| Ok(schedules.clone()));
 
@@ -273,8 +270,8 @@ mod tests {
         let repetitions = 5;
         let interval = chrono::Duration::seconds(30);
 
-        let schedules_repeated_interval = vec![MessageSchedule::new(
-            SchedulePattern::Interval(Interval::new(
+        let schedules_repeated_interval = vec![Transmission::new(
+            Schedule::Interval(Interval::new(
                 timestamp_now + chrono::Duration::seconds(10),
                 interval,
                 Repeat::Times(repetitions),
@@ -298,7 +295,7 @@ mod tests {
         // let schedules_repeated_interval_clone = schedules_repeated_interval.clone()
         let mut repository = MockRepository::new();
         repository
-            .expect_poll_batch()
+            .expect_poll_transmissions()
             .times(2)
             .returning(move |_, _| Ok(schedules_repeated_interval.clone()));
         repository.expect_save().returning(|_| Ok(())).times(1);
@@ -346,17 +343,17 @@ mod tests {
         let just_now = Utc::now() - chrono::Duration::milliseconds(10);
         let interval = chrono::Duration::milliseconds(100);
 
-        let original_schedule = MessageSchedule::new(
-            SchedulePattern::Interval(Interval::new(just_now, interval, Repeat::Infinitely)),
+        let original_schedule = Transmission::new(
+            Schedule::Interval(Interval::new(just_now, interval, Repeat::Infinitely)),
             Message::NatsEvent(NatsEvent::new(
                 "SUBJECT.arbitrary".into(),
                 "arbitrary payload".into(),
             )),
         );
 
-        let expected_schedule_0 = MessageSchedule {
+        let expected_transmission_0 = Transmission {
             id: original_schedule.id,
-            schedule_pattern: SchedulePattern::Interval(Interval {
+            schedule: Schedule::Interval(Interval {
                 first_transmission: just_now,
                 interval,
                 repeat: Repeat::Infinitely,
@@ -365,9 +362,9 @@ mod tests {
             transmission_count: 1,
             message: original_schedule.message.clone(),
         };
-        let expected_schedule_1 = MessageSchedule {
+        let expected_transmission_1 = Transmission {
             id: original_schedule.id,
-            schedule_pattern: SchedulePattern::Interval(Interval {
+            schedule: Schedule::Interval(Interval {
                 first_transmission: just_now,
                 interval,
                 repeat: Repeat::Infinitely,
@@ -376,9 +373,9 @@ mod tests {
             transmission_count: 2,
             message: original_schedule.message.clone(),
         };
-        let expected_schedule_2 = MessageSchedule {
+        let expected_transmission_2 = Transmission {
             id: original_schedule.id,
-            schedule_pattern: SchedulePattern::Interval(Interval {
+            schedule: Schedule::Interval(Interval {
                 first_transmission: just_now,
                 interval,
                 repeat: Repeat::Infinitely,
@@ -390,17 +387,17 @@ mod tests {
 
         repository
             .expect_save()
-            .with(eq(expected_schedule_0.clone()))
+            .with(eq(expected_transmission_0.clone()))
             .returning(|_| Ok(()))
             .times(1);
         repository
             .expect_save()
-            .with(eq(expected_schedule_1.clone()))
+            .with(eq(expected_transmission_1.clone()))
             .returning(|_| Ok(()))
             .times(1);
         repository
             .expect_save()
-            .with(eq(expected_schedule_2))
+            .with(eq(expected_transmission_2))
             .returning(|_| Ok(()))
             .times(1);
 
@@ -421,9 +418,9 @@ mod tests {
 
         let result = scheduler.transmit(&original_schedule).await;
         assert!(result.is_ok());
-        let result = scheduler.transmit(&expected_schedule_0).await;
+        let result = scheduler.transmit(&expected_transmission_0).await;
         assert!(result.is_ok());
-        let result = scheduler.transmit(&expected_schedule_1).await;
+        let result = scheduler.transmit(&expected_transmission_1).await;
         assert!(result.is_ok());
     }
 
@@ -437,54 +434,54 @@ mod tests {
         let just_now = Utc::now() - chrono::Duration::milliseconds(10);
         let interval = chrono::Duration::milliseconds(100);
 
-        let original_schedule_pattern = SchedulePattern::Interval(Interval::new(
+        let original_schedule = Schedule::Interval(Interval::new(
             just_now,
             interval,
             Repeat::Times(repetitions),
         ));
-        let original_schedule = MessageSchedule::new(
-            original_schedule_pattern.clone(),
+        let original_transmission = Transmission::new(
+            original_schedule.clone(),
             Message::NatsEvent(NatsEvent::new(
                 "SUBJECT.arbitrary".into(),
                 "arbitrary payload".into(),
             )),
         );
 
-        let expected_schedule_second_to_last = MessageSchedule {
-            id: original_schedule.id,
-            schedule_pattern: original_schedule_pattern.clone(),
+        let expected_transmission_second_to_last = Transmission {
+            id: original_transmission.id,
+            schedule: original_schedule.clone(),
             next: Some(just_now + interval),
             transmission_count: 1,
-            message: original_schedule.message.clone(),
+            message: original_transmission.message.clone(),
         };
-        let expected_schedule_last = MessageSchedule {
-            id: original_schedule.id,
-            schedule_pattern: original_schedule_pattern.clone(),
+        let expected_transmission_last = Transmission {
+            id: original_transmission.id,
+            schedule: original_schedule.clone(),
             next: Some(just_now + interval + interval),
             transmission_count: 2,
-            message: original_schedule.message.clone(),
+            message: original_transmission.message.clone(),
         };
-        let expected_schedule_done = MessageSchedule {
-            id: original_schedule.id,
-            schedule_pattern: original_schedule_pattern,
+        let expected_transmission_done = Transmission {
+            id: original_transmission.id,
+            schedule: original_schedule,
             next: None,
             transmission_count: 3,
-            message: original_schedule.message.clone(),
+            message: original_transmission.message.clone(),
         };
 
         repository
             .expect_save()
-            .with(eq(expected_schedule_second_to_last.clone()))
+            .with(eq(expected_transmission_second_to_last.clone()))
             .returning(|_| Ok(()))
             .times(1);
         repository
             .expect_save()
-            .with(eq(expected_schedule_last.clone()))
+            .with(eq(expected_transmission_last.clone()))
             .returning(|_| Ok(()))
             .times(1);
         repository
             .expect_save()
-            .with(eq(expected_schedule_done))
+            .with(eq(expected_transmission_done))
             .returning(|_| Ok(()))
             .times(1);
 
@@ -503,11 +500,13 @@ mod tests {
             Arc::new(metrics),
         );
 
-        let result = scheduler.transmit(&original_schedule).await;
+        let result = scheduler.transmit(&original_transmission).await;
         assert!(result.is_ok());
-        let result = scheduler.transmit(&expected_schedule_second_to_last).await;
+        let result = scheduler
+            .transmit(&expected_transmission_second_to_last)
+            .await;
         assert!(result.is_ok());
-        let result = scheduler.transmit(&expected_schedule_last).await;
+        let result = scheduler.transmit(&expected_transmission_last).await;
         assert!(result.is_ok());
     }
 
@@ -515,7 +514,7 @@ mod tests {
     async fn test_schedule() {
         let mut repository = MockRepository::new();
         repository
-            .expect_store_schedule()
+            .expect_store_transmission()
             .returning(|_| Ok(()))
             .times(1);
 
@@ -535,9 +534,9 @@ mod tests {
         );
 
         let now = Utc::now();
-        let pattern = SchedulePattern::Delayed(Delayed::new(now));
+        let schedule = Schedule::Delayed(Delayed::new(now));
 
-        let result = scheduler.schedule(pattern, arbitrary_message()).await;
+        let result = scheduler.schedule(schedule, arbitrary_message()).await;
         assert!(result.is_ok());
     }
 
@@ -545,7 +544,7 @@ mod tests {
     async fn test_schedule_fail() {
         let mut repository = MockRepository::new();
         repository
-            .expect_store_schedule()
+            .expect_store_transmission()
             .returning(|_| Err("Failed to schedule message".into()))
             .times(1);
 
@@ -565,9 +564,9 @@ mod tests {
         );
 
         let now = Utc::now();
-        let pattern = SchedulePattern::Delayed(Delayed::new(now));
+        let schedule = Schedule::Delayed(Delayed::new(now));
 
-        let result = scheduler.schedule(pattern, arbitrary_message()).await;
+        let result = scheduler.schedule(schedule, arbitrary_message()).await;
         assert!(result.is_err());
     }
 
@@ -578,9 +577,9 @@ mod tests {
         ))
     }
 
-    fn new_schedule_delayed() -> MessageSchedule {
-        MessageSchedule::new(
-            SchedulePattern::Delayed(Delayed::new(
+    fn new_transmission_delayed() -> Transmission {
+        Transmission::new(
+            Schedule::Delayed(Delayed::new(
                 Utc::now() - chrono::Duration::milliseconds(10),
             )),
             Message::NatsEvent(NatsEvent::new(
@@ -590,9 +589,9 @@ mod tests {
         )
     }
 
-    fn new_schedule_interval_infinitely() -> MessageSchedule {
-        MessageSchedule::new(
-            SchedulePattern::Interval(Interval::new(
+    fn new_schedule_interval_infinitely() -> Transmission {
+        Transmission::new(
+            Schedule::Interval(Interval::new(
                 Utc::now() - chrono::Duration::milliseconds(10),
                 chrono::Duration::milliseconds(100),
                 Repeat::Infinitely,
@@ -604,9 +603,9 @@ mod tests {
         )
     }
 
-    fn new_schedule_interval_n() -> MessageSchedule {
-        MessageSchedule::new(
-            SchedulePattern::Interval(Interval::new(
+    fn new_schedule_interval_n() -> Transmission {
+        Transmission::new(
+            Schedule::Interval(Interval::new(
                 Utc::now() - chrono::Duration::milliseconds(10),
                 chrono::Duration::milliseconds(100),
                 Repeat::Times(5),
@@ -618,9 +617,9 @@ mod tests {
         )
     }
 
-    fn new_schedule_interval_last() -> MessageSchedule {
-        MessageSchedule::new(
-            SchedulePattern::Interval(Interval::new(
+    fn new_schedule_interval_last() -> Transmission {
+        Transmission::new(
+            Schedule::Interval(Interval::new(
                 Utc::now() - chrono::Duration::milliseconds(10),
                 chrono::Duration::milliseconds(100),
                 Repeat::Times(0),
@@ -632,9 +631,8 @@ mod tests {
         )
     }
 
-    type ScheduleSaveFn = dyn Fn(&MessageSchedule) -> Result<(), Box<dyn Error + Send + Sync + 'static>>
-        + Send
-        + Sync;
+    type ScheduleSaveFn =
+        dyn Fn(&Transmission) -> Result<(), Box<dyn Error + Send + Sync + 'static>> + Send + Sync;
     type RescheduleFn =
         dyn Fn(&Uuid) -> Result<(), Box<dyn Error + Send + Sync + 'static>> + Send + Sync;
 
@@ -645,7 +643,7 @@ mod tests {
 
     struct TransmissionTestCase {
         name: String,
-        schedule: MessageSchedule,
+        schedule: Transmission,
         transmission:
             Box<dyn Fn(Message) -> Result<(), Box<dyn Error + Send + Sync + 'static>> + Send>,
         schedule_state_transition: ScheduleStateTransition,
@@ -655,10 +653,10 @@ mod tests {
     #[tokio::test]
     async fn test_transmission_and_appropriate_state_transition() {
         let test_cases = vec![
-            // Delayed message schedules.
+            // Delayed transmissions.
             TransmissionTestCase {
                 name: "delayed_success".into(),
-                schedule: new_schedule_delayed(),
+                schedule: new_transmission_delayed(),
                 transmission: Box::new(move |_| Ok(())),
                 schedule_state_transition: ScheduleStateTransition::Save(
                     Box::new(move |_| Ok(())),
@@ -668,7 +666,7 @@ mod tests {
             },
             TransmissionTestCase {
                 name: "delayed_fail_and_reschedule".into(),
-                schedule: new_schedule_delayed(),
+                schedule: new_transmission_delayed(),
                 transmission: Box::new(move |_| Err("Let's hope this gets rescheduled.".into())),
                 schedule_state_transition: ScheduleStateTransition::Reschedule(
                     Box::new(move |_| Ok(())),
@@ -678,7 +676,7 @@ mod tests {
             },
             TransmissionTestCase {
                 name: "delayed_transmit_but_fail_mark_done".into(),
-                schedule: new_schedule_delayed(),
+                schedule: new_transmission_delayed(),
                 transmission: Box::new(move |_| Ok(())),
                 schedule_state_transition: ScheduleStateTransition::Save(
                     Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
@@ -688,7 +686,7 @@ mod tests {
             },
             TransmissionTestCase {
                 name: "delayed_transmit_fail_and_reschedule_fail".into(),
-                schedule: new_schedule_delayed(),
+                schedule: new_transmission_delayed(),
                 transmission: Box::new(move |_| Err("Even the reschedule hereafter fails".into())),
                 schedule_state_transition: ScheduleStateTransition::Reschedule(
                     Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
@@ -869,31 +867,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_poll_datetimes_schedules_success() {
-        let schedule_list = vec![new_schedule_delayed(), new_schedule_delayed()];
-        let amount_schedules = schedule_list.len();
-        let schedule_list_clone = schedule_list.clone();
+        let transmission_list = vec![new_transmission_delayed(), new_transmission_delayed()];
+        let amount_transmissions = transmission_list.len();
+        let transmission_list_clone = transmission_list.clone();
 
         let mut repository = MockRepository::new();
         repository
-            .expect_poll_batch()
+            .expect_poll_transmissions()
             .times(1)
             .returning(move |_, batch_size| {
                 assert_eq!(batch_size, BATCH_SIZE);
-                Ok(schedule_list_clone.clone())
+                Ok(transmission_list_clone.clone())
             });
 
-        let mut publisher = MockTransmitter::new();
-        publisher
+        let mut transmitter = MockTransmitter::new();
+        transmitter
             .expect_transmit()
-            .times(amount_schedules)
+            .times(amount_transmissions)
             .returning(|_message| Ok(()));
 
         repository
             .expect_save()
-            .times(amount_schedules)
+            .times(amount_transmissions)
             .returning(move |schedule| {
                 // This schedule belongs to the original list constructed.
-                assert!(schedule_list
+                assert!(transmission_list
                     .clone()
                     .iter()
                     .any(|schedule_iter| &schedule_iter.id == &schedule.id));
@@ -911,16 +909,16 @@ mod tests {
             .expect_count()
             .with(eq(MetricEvent::Transmitted(true)))
             .returning(|_| ())
-            .times(amount_schedules);
+            .times(amount_transmissions);
         metrics
             .expect_count()
             .with(eq(MetricEvent::ScheduleStateSaved(true)))
             .returning(|_| ())
-            .times(amount_schedules);
+            .times(amount_transmissions);
 
         let scheduler = TransmissionScheduler::new(
             Arc::new(repository),
-            Arc::new(publisher),
+            Arc::new(transmitter),
             Arc::new(Utc::now),
             Arc::new(metrics),
         );
@@ -934,14 +932,14 @@ mod tests {
         let now = Utc::now();
         let ten_milliseconds = chrono::Duration::milliseconds(10);
 
-        let schedules = vec![MessageSchedule::new(
-            SchedulePattern::Delayed(Delayed::new(now - ten_milliseconds)),
+        let schedules = vec![Transmission::new(
+            Schedule::Delayed(Delayed::new(now - ten_milliseconds)),
             arbitrary_message(),
         )];
 
         let mut repository = MockRepository::new();
         repository
-            .expect_poll_batch()
+            .expect_poll_transmissions()
             .times(1)
             .returning(move |_, _| Ok(schedules.clone()));
         repository
@@ -994,17 +992,17 @@ mod tests {
         let index_message_failure = 1;
 
         let schedule_list = vec![
-            MessageSchedule::new(
+            Transmission::new(
                 // Ready to process.
-                SchedulePattern::Delayed(Delayed::new(now - ten_milliseconds)),
+                Schedule::Delayed(Delayed::new(now - ten_milliseconds)),
                 Message::NatsEvent(NatsEvent::new(
                     message_subject_success.into(),
                     "random_payload".into(),
                 )),
             ),
-            MessageSchedule::new(
+            Transmission::new(
                 // Ready to process.
-                SchedulePattern::Delayed(Delayed::new(now - ten_milliseconds)),
+                Schedule::Delayed(Delayed::new(now - ten_milliseconds)),
                 Message::NatsEvent(NatsEvent::new(
                     message_subject_failure.into(),
                     "random_payload".into(),
@@ -1017,7 +1015,7 @@ mod tests {
 
         let mut repository = MockRepository::new();
         repository
-            .expect_poll_batch()
+            .expect_poll_transmissions()
             .times(1)
             .returning(move |_, batch_size| {
                 assert_eq!(batch_size, BATCH_SIZE);
@@ -1107,8 +1105,8 @@ mod tests {
         let cron_schedule =
             cron::Schedule::from_str(expression).expect("should be valid cron schedule");
 
-        let schedule = MessageSchedule::new(
-            SchedulePattern::Cron(Cron::new(
+        let schedule = Transmission::new(
+            Schedule::Cron(Cron::new(
                 timestamp_first_poll,
                 cron_schedule.clone(),
                 Repeat::Times(5),
@@ -1130,7 +1128,7 @@ mod tests {
 
         // First poll: no ready schedules yet, so no transmission.
         repository
-            .expect_poll_batch()
+            .expect_poll_transmissions()
             .times(1)
             .in_sequence(&mut sequence)
             .returning(move |_, _| Ok(vec![schedule_first_poll.clone()]));
@@ -1144,10 +1142,10 @@ mod tests {
             .returning(move || timestamp_first_poll_clone.clone());
 
         // Second poll: schedule is ready: so transmit.
-        let expected_schedule = MessageSchedule {
+        let expected_schedule = Transmission {
             id: schedule.id,
             message: schedule.message,
-            schedule_pattern: SchedulePattern::Cron(Cron {
+            schedule: Schedule::Cron(Cron {
                 first_transmission_after: timestamp_first_poll,
                 repeat: Repeat::Times(5),
                 schedule: cron_schedule.clone(),
@@ -1156,7 +1154,7 @@ mod tests {
             transmission_count: 1,
         };
         repository
-            .expect_poll_batch()
+            .expect_poll_transmissions()
             .times(1)
             .in_sequence(&mut sequence)
             .returning(move |_, _| Ok(vec![schedule_second_poll.clone()]));

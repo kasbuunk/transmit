@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nWITH locked_schedules AS (\n    UPDATE message_schedule\n    SET is_locked = true\n    WHERE id IN (\n        SELECT id\n        FROM (\n            SELECT id, MAX(inserted_at) AS latest_inserted_at\n            FROM message_schedule\n            GROUP BY id\n        ) latest_entries\n        WHERE inserted_at = latest_inserted_at\n    )\n    AND next IS NOT NULL\n    AND next < $1\n    AND is_locked = false\n    RETURNING id, message, next, schedule_pattern, transmission_count\n)\nSELECT * FROM locked_schedules\nLIMIT $2;\n        ",
+  "query": "\nWITH locked_schedules AS (\n    UPDATE transmission\n    SET is_locked = true\n    WHERE id IN (\n        SELECT id\n        FROM (\n            SELECT id, MAX(inserted_at) AS latest_inserted_at\n            FROM transmission\n            GROUP BY id\n        ) latest_entries\n        WHERE inserted_at = latest_inserted_at\n    )\n    AND next IS NOT NULL\n    AND next < $1\n    AND is_locked = false\n    RETURNING id, message, next, schedule, transmission_count\n)\nSELECT * FROM locked_schedules\nLIMIT $2;\n        ",
   "describe": {
     "columns": [
       {
@@ -20,7 +20,7 @@
       },
       {
         "ordinal": 3,
-        "name": "schedule_pattern",
+        "name": "schedule",
         "type_info": "Text"
       },
       {
@@ -43,5 +43,5 @@
       false
     ]
   },
-  "hash": "42ec21f0f8b7b131258d37febb253db3299f1606d67b6a0baac9c3c0f4033a13"
+  "hash": "a76628107bfb0b10af091c0cce9106acc8ec0e89b2a2367bb5ffe202a2b1b5ac"
 }

@@ -4,7 +4,7 @@ package scheduler;
 import "google/protobuf/timestamp.proto";
 
 service Scheduler {
-	rpc ScheduleMessage (ScheduleMessageRequest) returns (ScheduleMessageResponse);
+	rpc ScheduleTransmission (ScheduleTransmissionRequest) returns (ScheduleTransmissionResponse);
 }
 
 message NatsEvent {
@@ -16,7 +16,7 @@ message Delayed {
 	google.protobuf.Timestamp transmit_at = 1;
 }
 
-message ScheduleMessageRequest {
+message ScheduleTransmissionRequest {
 	oneof Schedule {
 		Delayed delayed = 1;
 	}
@@ -25,8 +25,8 @@ message ScheduleMessageRequest {
 	}
 }
 
-message ScheduleMessageResponse {
-	string schedule_entry_id = 1 ;
+message ScheduleTransmissionResponse {
+	string transmission_id = 1 ;
 }
 
 // Implement gRPC Health Checking Protocol.

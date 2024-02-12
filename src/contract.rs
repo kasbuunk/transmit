@@ -7,32 +7,28 @@ use chrono::prelude::*;
 use mockall::{automock, mock, predicate::*};
 use uuid::Uuid;
 
-use crate::model::{Message, MessageSchedule, MetricEvent, SchedulePattern};
+use crate::model::{Message, MetricEvent, Schedule, Transmission};
 
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait Scheduler: Send + Sync {
-    async fn schedule(
-        &self,
-        schedule: SchedulePattern,
-        message: Message,
-    ) -> Result<Uuid, Box<dyn Error>>;
+    async fn schedule(&self, schedule: Schedule, message: Message) -> Result<Uuid, Box<dyn Error>>;
 }
 
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait Repository: Send + Sync {
-    async fn store_schedule(
+    async fn store_transmission(
         &self,
-        schedule: &MessageSchedule,
+        schedule: &Transmission,
     ) -> Result<(), Box<dyn Error + Send + Sync>>;
-    async fn poll_batch(
+    async fn poll_transmissions(
         &self,
         before: DateTime<Utc>,
         batch_size: u32,
-    ) -> Result<Vec<MessageSchedule>, Box<dyn Error>>;
-    async fn save(&self, schedule: &MessageSchedule) -> Result<(), Box<dyn Error + Send + Sync>>;
-    async fn reschedule(&self, schedule_id: &Uuid) -> Result<(), Box<dyn Error + Send + Sync>>;
+    ) -> Result<Vec<Transmission>, Box<dyn Error>>;
+    async fn save(&self, schedule: &Transmission) -> Result<(), Box<dyn Error + Send + Sync>>;
+    async fn reschedule(&self, transmission_id: &Uuid) -> Result<(), Box<dyn Error + Send + Sync>>;
 }
 
 #[cfg_attr(test, automock)]
