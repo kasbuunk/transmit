@@ -2,6 +2,7 @@ pub mod config;
 pub mod contract;
 pub mod grpc;
 pub mod integration_test;
+pub mod load_config;
 pub mod metrics;
 pub mod model;
 pub mod nats;

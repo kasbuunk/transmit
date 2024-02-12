@@ -6,7 +6,6 @@ mod tests {
     use chrono::Duration;
     use futures::StreamExt;
 
-    use transmit::config;
     use transmit::grpc;
     use transmit::nats;
 
@@ -16,27 +15,16 @@ mod tests {
     // And observe live with:
     // `nats sub -s "nats://localhost:4222" INTEGRATION.schedule_message`
     async fn schedule_message() {
-        let config_filename = "./tests/e2e.ron";
-        let configuration =
-            config::load_config_from_file(config_filename).expect("could not load configuration");
-        assert_eq!(configuration.log_level, "debug");
-
         let timestamp_now = Utc::now();
         let transmit_after_seconds = timestamp_now + Duration::milliseconds(800); // Initialise nats connection.
-        let nats_connection = match configuration.transmitter {
-            config::Transmitter::Nats(nats_config) => {
-                let nats_connection = nats::connect_to_nats(nats::Config {
-                    port: nats_config.port,
-                    // host is overridden, because the config file contains how the program itself
-                    // can find nats, which is through Docker's DNS.
-                    host: "0.0.0.0".to_string(),
-                })
-                .await
-                .expect("could not connect to nats on port 4222");
-
-                nats_connection
-            }
-        };
+        let nats_connection = nats::connect_to_nats(nats::Config {
+            port: 4222,
+            // host is overridden, because the config file contains how the program itself
+            // can find nats, which is through Docker's DNS.
+            host: "0.0.0.0".to_string(),
+        })
+        .await
+        .expect("could not connect to nats on port 4222");
 
         // Subscribe to test subject, to assert transmissions.
         let subject = "ENDTOEND.schedule_message";

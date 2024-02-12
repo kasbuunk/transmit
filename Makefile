@@ -42,7 +42,7 @@ e2ek8s: k8s e2etest k8sdown
 
 .PHONY: k8s
 k8s: k8sdown
-	kind create cluster --name e2e
+	kind create cluster --name e2e || echo "Cluster 'e2e' is already running"
 	kubectl cluster-info --context kind-e2e
 	helm install postgresql bitnami/postgresql --set auth.postgresPassword="postgres" --set auth.database="transmit"
 	helm install prometheus bitnami/prometheus --set serverFiles.prometheus.yml.scrape-configs[0].job_name="transmit" --set serverFiles.prometheus.yml.scrape-configs[0].static_configs[0].targets[0]="transmit.default.svc.cluster.local:9090"
@@ -54,4 +54,4 @@ k8s: k8sdown
 
 .PHONY: k8sdown
 k8sdown:
-	kind delete cluster --name e2e
+	kind delete cluster --name e2e || echo "No cluster running named 'e2e'"

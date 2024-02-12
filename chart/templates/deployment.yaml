@@ -43,6 +43,9 @@ spec:
             - name: metrics
               containerPort: {{ .Values.metrics.port}}
               protocol: TCP
+          env:
+            - name: POSTGRES_PASSWORD
+              value: "{{ .Values.database.password }}"
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:

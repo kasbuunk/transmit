@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 use transmit::config;
 use transmit::contract;
 use transmit::grpc;
+use transmit::load_config;
 use transmit::metrics;
 use transmit::nats;
 use transmit::postgres;
@@ -18,11 +19,13 @@ use transmit::repository_postgres;
 use transmit::scheduler;
 use transmit::transmitter_nats;
 
+const DEFAULT_CONFIG_FILE_PATH: &'static str = "config.ron";
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let config_file_path = match args.len() {
-        1 => "config.ron", // Default configuration file.
+        1 => DEFAULT_CONFIG_FILE_PATH,
         2 => &args[1],
         _ => {
             println!("Please specify the path to the configuration file as the only argument.");
@@ -32,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Load configuration.
-    let config = config::load_config_from_file(config_file_path)?;
+    let config = load_config::load_config(config_file_path)?;
 
     // Initialise logger.
     let rust_log = "RUST_LOG";

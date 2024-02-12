@@ -15,12 +15,11 @@ data:
                     ),
             ),
             repository: Postgres(
-                    Config(
+                    Postgres(
                             name: "{{ .Values.database.name }}",
                             host: "{{ .Values.database.host }}",
                             port: {{ .Values.database.port }},
                             user: "{{ .Values.database.user }}",
-                            password: "{{ .Values.database.password }}",
                             ssl: {{ .Values.database.ssl }},
                     ),
             ),

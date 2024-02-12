@@ -10,6 +10,8 @@ services:
       - prometheus
     ports:
       - "8080:80"
+    environment:
+    - POSTGRES_PASSWORD=cantguess
     volumes:
       # This assumes a `config.ron` file is located at the
       # root of the build context.
@@ -18,9 +20,9 @@ services:
   db:
     image: postgres:latest
     environment:
-      - POSTGRES_DB=transmit_test
+      - POSTGRES_DB=transmit
       - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_PASSWORD=cantguess
     ports:
       - "5432:5432"
     volumes:
