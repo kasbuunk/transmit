@@ -5,14 +5,13 @@ mod tests {
     use chrono::prelude::*;
     use chrono::Duration;
     use futures::StreamExt;
-    use mockall::predicate::*;
     use mockall::Sequence;
     use sqlx::postgres::PgPool;
     use tokio_util::sync::CancellationToken;
 
     use crate::contract::*;
     use crate::grpc;
-    use crate::model::MetricEvent;
+    use crate::metrics;
     use crate::nats;
     use crate::postgres;
     use crate::repository_postgres;
@@ -46,32 +45,15 @@ mod tests {
             .in_sequence(&mut sequence_now)
             .returning(move || two_minutes_later);
 
-        let mut metrics = MockMetrics::new();
-        metrics
-            .expect_count()
-            .with(eq(MetricEvent::Polled(true)))
-            .returning(|_| ())
-            .times(3);
-        metrics
-            .expect_count()
-            .with(eq(MetricEvent::Scheduled(true)))
-            .returning(|_| ())
-            .times(1);
-        metrics
-            .expect_count()
-            .with(eq(MetricEvent::Transmitted(true)))
-            .returning(|_| ())
-            .times(1);
-        metrics
-            .expect_count()
-            .with(eq(MetricEvent::ScheduleStateSaved(true)))
-            .returning(|_| ())
-            .times(1);
+        let (prometheus_client, _) = metrics::new(metrics::Config {
+            port: 9090,
+            endpoint: "/metrics".to_string(),
+        });
 
         // Initialise postgres connection.
-        let connection = test_db().await;
+        let postgres_connection = test_db().await;
         // Construct repository.
-        let repository = repository_postgres::RepositoryPostgres::new(connection);
+        let repository = repository_postgres::RepositoryPostgres::new(postgres_connection);
         repository
             .migrate()
             .await
@@ -93,7 +75,7 @@ mod tests {
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(now),
-            Arc::new(metrics),
+            Arc::new(prometheus_client),
         );
 
         // Subscribe to test subject, to assert transmissions.
