@@ -11,11 +11,13 @@ mod tests {
 
     use crate::contract::*;
     use crate::grpc;
+    use crate::grpc::proto::scheduler_client::SchedulerClient;
     use crate::metrics;
     use crate::nats;
     use crate::postgres;
     use crate::repository_postgres;
     use crate::scheduler;
+    use crate::scheduler::TransmissionScheduler;
     use crate::transmitter_nats;
 
     #[tokio::test]
@@ -45,38 +47,11 @@ mod tests {
             .in_sequence(&mut sequence_now)
             .returning(move || two_minutes_later);
 
-        let (prometheus_client, _) = metrics::new(metrics::Config {
-            port: 9090,
-            endpoint: "/metrics".to_string(),
-        });
-
-        // Initialise postgres connection.
-        let postgres_connection = test_db().await;
-        // Construct repository.
-        let repository = repository_postgres::RepositoryPostgres::new(postgres_connection);
-        repository
-            .migrate()
-            .await
-            .expect("could not run migrations");
-        repository.clear_all().await.expect("could not clear table");
-
-        // Initialise nats connection.
-        let nats_connection = nats::connect_to_nats(nats::Config {
-            port: 4222,
-            host: "0.0.0.0".to_string(),
-        })
-        .await
-        .expect("could not connect to nats; is the server running on port 4222?");
-        // Construct transmitter.
-        let transmitter = transmitter_nats::NatsPublisher::new(nats_connection.clone());
-
-        // Construct scheduler.
-        let scheduler = scheduler::TransmissionScheduler::new(
-            Arc::new(repository),
-            Arc::new(transmitter),
-            Arc::new(now),
-            Arc::new(prometheus_client),
-        );
+        let nats_connection = nats_connection().await;
+        let scheduler = new_scheduler(now, &nats_connection).await;
+        let grpc_port = 50052;
+        start_server(scheduler.clone(), grpc_port).await;
+        let mut grpc_client = new_grpc_client(grpc_port).await;
 
         // Subscribe to test subject, to assert transmissions.
         let subject = "INTEGRATION.schedule_transmission";
@@ -95,25 +70,6 @@ mod tests {
             new_transmission(subject.to_string(), transmit_after_30s);
         let grpc_request = tonic::Request::new(schedule_transmission_request);
 
-        // Schedule a message with delayed(transmit_after_30s).
-        let scheduler_arc = Arc::new(scheduler.clone());
-        let grpc_port = 50052;
-        let grpc_config = grpc::Config { port: grpc_port };
-        let grpc_server = grpc::GrpcServer::new(grpc_config, scheduler_arc.clone());
-        tokio::task::spawn(async move {
-            grpc_server
-                .serve(CancellationToken::new())
-                .await
-                .expect("failed to start grpc server");
-        });
-        // Allow time for the server to initialise.
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        let host = "localhost";
-        let address = format!("http://{}:{}", host, grpc_port);
-        // Connect to serer.
-        let mut grpc_client = grpc::proto::scheduler_client::SchedulerClient::connect(address)
-            .await
-            .expect("failed to connect to grpc server");
         // Do the request.
         let response = grpc_client
             .schedule_transmission(grpc_request)
@@ -234,5 +190,82 @@ mod tests {
             .expect("connecting to postgres failed. Is postgres running on port 5432?");
 
         connection
+    }
+
+    fn metric_client() -> metrics::MetricClient {
+        let (prometheus_client, _) = metrics::new(metrics::Config {
+            port: 9090,
+            endpoint: "/metrics".to_string(),
+        });
+
+        prometheus_client
+    }
+
+    async fn nats_connection() -> async_nats::Client {
+        let nats_connection = nats::connect_to_nats(nats::Config {
+            port: 4222,
+            host: "0.0.0.0".to_string(),
+        })
+        .await
+        .expect("could not connect to nats; is the server running on port 4222?");
+
+        nats_connection
+    }
+
+    fn nats_publisher(nats_connection: &async_nats::Client) -> transmitter_nats::NatsPublisher {
+        transmitter_nats::NatsPublisher::new(nats_connection.clone())
+    }
+
+    async fn postgres_repository() -> repository_postgres::RepositoryPostgres {
+        // Initialise postgres connection.
+        let postgres_connection = test_db().await;
+        // Construct repository.
+        let repository = repository_postgres::RepositoryPostgres::new(postgres_connection);
+        repository
+            .migrate()
+            .await
+            .expect("could not run migrations");
+
+        repository
+    }
+
+    async fn new_scheduler(
+        now: MockNow,
+        nats_connection: &async_nats::Client,
+    ) -> Arc<TransmissionScheduler> {
+        let scheduler = scheduler::TransmissionScheduler::new(
+            Arc::new(postgres_repository().await),
+            Arc::new(nats_publisher(&nats_connection)),
+            Arc::new(now),
+            Arc::new(metric_client()),
+        );
+
+        Arc::new(scheduler)
+    }
+
+    async fn start_server(transmission_scheduler: Arc<TransmissionScheduler>, grpc_port: u16) {
+        let grpc_config = grpc::Config { port: grpc_port };
+        let grpc_server = grpc::GrpcServer::new(grpc_config, transmission_scheduler.clone());
+
+        tokio::task::spawn(async move {
+            grpc_server
+                .serve(CancellationToken::new())
+                .await
+                .expect("failed to start grpc server");
+        });
+
+        // Allow time for the server to initialise.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    async fn new_grpc_client(port: u16) -> SchedulerClient<tonic::transport::Channel> {
+        let host = "localhost";
+        let address = format!("http://{}:{}", host, port);
+        // Connect to serer.
+        let grpc_client = grpc::proto::scheduler_client::SchedulerClient::connect(address)
+            .await
+            .expect("failed to connect to grpc server");
+
+        grpc_client
     }
 }
