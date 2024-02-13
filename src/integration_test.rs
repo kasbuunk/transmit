@@ -24,33 +24,32 @@ mod tests {
     // To monitor the transmitted messages, run nats via docker with:
     // `docker run -p 4222:4222 -ti nats:latest`
     // And observe live with:
-    // `nats sub -s "nats://localhost:4222" INTEGRATION.schedule_transmission`
+    // `nats sub -s "nats://localhost:4222" {see subject defined in test}`
     async fn schedule_delayed_transmission() {
+        let subject = "INTEGRATION.delayed_transmission";
         let timestamp_now = Utc::now();
-        let ten_seconds_later = timestamp_now + Duration::seconds(10);
-        let transmit_after_30s = timestamp_now + Duration::seconds(30);
-        let one_minute_later = timestamp_now + Duration::seconds(60);
-        let two_minutes_later = timestamp_now + Duration::seconds(120);
+        let listen_timeout_duration = std::time::Duration::from_millis(25);
+
+        let transmission_timestamp = timestamp_now + Duration::seconds(30);
+        let process_listen_iterations = vec![
+            // First poll is too soon, expect no tranmsision.
+            (timestamp_now + Duration::seconds(10), false),
+            // Second poll is after the tranmission is due. Expect transmission.
+            (timestamp_now + Duration::seconds(60), true),
+            // Third poll is after the transmission, but that should not repeat.
+            (timestamp_now + Duration::seconds(120), false),
+        ];
 
         let mut now = MockNow::new();
         let mut sequence_now = Sequence::new();
-        now.expect_now()
-            .once()
-            .in_sequence(&mut sequence_now)
-            .returning(move || ten_seconds_later);
-        now.expect_now()
-            .once()
-            .in_sequence(&mut sequence_now)
-            .returning(move || one_minute_later);
-        now.expect_now()
-            .once()
-            .in_sequence(&mut sequence_now)
-            .returning(move || two_minutes_later);
+        for process_listen_iteration in process_listen_iterations.clone() {
+            now.expect_now()
+                .once()
+                .in_sequence(&mut sequence_now)
+                .returning(move || process_listen_iteration.0);
+        }
 
         let (scheduler, mut grpc_client, nats_connection) = initialise(now, 50052).await;
-
-        // Subscribe to test subject, to assert transmissions.
-        let subject = "INTEGRATION.schedule_transmission";
 
         // Assert no transmission just yet.
         let flag_first_listening = Arc::new(Mutex::new(false));
@@ -63,7 +62,7 @@ mod tests {
 
         // Construct the grpc request, containing a schedule and message.
         let schedule_transmission_request =
-            new_transmission(subject.to_string(), transmit_after_30s);
+            new_delayed_transmission_request(subject.to_string(), transmission_timestamp);
         let grpc_request = tonic::Request::new(schedule_transmission_request);
 
         // Do the request.
@@ -74,65 +73,19 @@ mod tests {
         let _ = uuid::Uuid::parse_str(&response.into_inner().transmission_id)
             .expect("response should contain uuid");
 
-        // Invoke poll-transmit (second: ten_seconds_later), assert nothing happened.
-        let received_flag_after_10s = Arc::new(Mutex::new(false));
-        let _handle_cannot_be_joined = listen_for_transmission(
-            &mut nats_connection.clone(),
-            subject.into(),
-            received_flag_after_10s.clone(),
-        )
-        .await;
-        scheduler.process_batch().await.expect("process should run");
-        let timeout_duration = std::time::Duration::from_millis(25);
-        let timeout_reached = tokio::time::timeout(timeout_duration, async {
-            // Wait until the flag is set to true (message received)
-            while !*received_flag_after_10s.lock().unwrap() {
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            }
-        })
-        .await;
-        assert!(timeout_reached.is_err());
-
-        // Invoke another poll-transmit (third: one_minute_later), assert the transmission.
-        let received_flag_after_60s = Arc::new(Mutex::new(false));
-        let _handle = listen_for_transmission(
-            &mut nats_connection.clone(),
-            subject.into(),
-            received_flag_after_60s.clone(),
-        )
-        .await;
-        scheduler.process_batch().await.expect("process should run");
-        let timeout_duration = std::time::Duration::from_millis(25);
-        let timeout_reached = tokio::time::timeout(timeout_duration, async {
-            // Wait until the flag is set to true (message received)
-            while !*received_flag_after_60s.lock().unwrap() {
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            }
-        })
-        .await;
-        timeout_reached.expect("transmission should set flag before timeout");
-
-        // Invoke another poll-transmit (fourth: two_minutes_later), assert happened.
-        let received_flag_after_120s = Arc::new(Mutex::new(false));
-        let _handle_cannot_be_joined = listen_for_transmission(
-            &mut nats_connection.clone(),
-            subject.into(),
-            received_flag_after_120s.clone(),
-        )
-        .await;
-        scheduler.process_batch().await.expect("process should run");
-        let timeout_duration = std::time::Duration::from_millis(25);
-        let timeout_reached = tokio::time::timeout(timeout_duration, async {
-            // Wait until the flag is set to true (message received)
-            while !*received_flag_after_120s.lock().unwrap() {
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            }
-        })
-        .await;
-        assert!(timeout_reached.is_err());
+        for process_listen_iteration in process_listen_iterations {
+            process_and_listen(
+                scheduler.clone(),
+                subject,
+                &nats_connection,
+                listen_timeout_duration,
+                process_listen_iteration.1,
+            )
+            .await;
+        }
     }
 
-    fn new_transmission(
+    fn new_delayed_transmission_request(
         subject: String,
         timestamp: DateTime<Utc>,
     ) -> grpc::proto::ScheduleTransmissionRequest {
@@ -279,5 +232,32 @@ mod tests {
         let grpc_client = new_grpc_client(grpc_port).await;
 
         (scheduler, grpc_client, nats_connection)
+    }
+
+    async fn process_and_listen(
+        scheduler: Arc<TransmissionScheduler>,
+        subject: &str,
+        nats_connection: &async_nats::Client,
+        listen_duration: std::time::Duration,
+        expect_received: bool,
+    ) {
+        let received_flag_before_transmission = Arc::new(Mutex::new(false));
+        let _handle = listen_for_transmission(
+            &mut nats_connection.clone(),
+            subject.into(),
+            received_flag_before_transmission.clone(),
+        )
+        .await;
+
+        scheduler.process_batch().await.expect("process should run");
+
+        let timeout_reached = tokio::time::timeout(listen_duration, async {
+            // Wait until the flag is set to true (message received)
+            while !*received_flag_before_transmission.lock().unwrap() {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await;
+        assert_eq!(timeout_reached.is_ok(), expect_received);
     }
 }
