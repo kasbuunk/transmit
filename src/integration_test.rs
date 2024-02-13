@@ -25,7 +25,7 @@ mod tests {
     // `docker run -p 4222:4222 -ti nats:latest`
     // And observe live with:
     // `nats sub -s "nats://localhost:4222" INTEGRATION.schedule_transmission`
-    async fn schedule_transmission() {
+    async fn schedule_delayed_transmission() {
         let timestamp_now = Utc::now();
         let ten_seconds_later = timestamp_now + Duration::seconds(10);
         let transmit_after_30s = timestamp_now + Duration::seconds(30);
@@ -47,11 +47,7 @@ mod tests {
             .in_sequence(&mut sequence_now)
             .returning(move || two_minutes_later);
 
-        let nats_connection = nats_connection().await;
-        let scheduler = new_scheduler(now, &nats_connection).await;
-        let grpc_port = 50052;
-        start_server(scheduler.clone(), grpc_port).await;
-        let mut grpc_client = new_grpc_client(grpc_port).await;
+        let (scheduler, mut grpc_client, nats_connection) = initialise(now, 50052).await;
 
         // Subscribe to test subject, to assert transmissions.
         let subject = "INTEGRATION.schedule_transmission";
@@ -267,5 +263,21 @@ mod tests {
             .expect("failed to connect to grpc server");
 
         grpc_client
+    }
+
+    async fn initialise(
+        now: MockNow,
+        grpc_port: u16,
+    ) -> (
+        Arc<TransmissionScheduler>,
+        SchedulerClient<tonic::transport::Channel>,
+        async_nats::Client,
+    ) {
+        let nats_connection = nats_connection().await;
+        let scheduler = new_scheduler(now, &nats_connection).await;
+        start_server(scheduler.clone(), grpc_port).await;
+        let grpc_client = new_grpc_client(grpc_port).await;
+
+        (scheduler, grpc_client, nats_connection)
     }
 }
