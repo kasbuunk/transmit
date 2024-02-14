@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::str::FromStr;
+use std::time;
 
 use bytes::Bytes;
 use chrono::prelude::*;
@@ -117,15 +118,14 @@ impl Delayed {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Interval {
     pub first_transmission: DateTime<Utc>,
-    #[serde_as(as = "serde_with::DurationNanoSeconds<i64>")]
-    pub interval: chrono::Duration,
+    pub interval: time::Duration,
     pub repeat: Repeat,
 }
 
 impl Interval {
     pub fn new(
         first_transmission: DateTime<Utc>,
-        interval: chrono::Duration,
+        interval: time::Duration,
         repeat: Repeat,
     ) -> Interval {
         Interval {
@@ -139,12 +139,10 @@ impl Interval {
         match self.repeat {
             Repeat::Times(repetitions) => match transmission_count >= repetitions {
                 true => None,
-                false => {
-                    Some(self.first_transmission + self.interval * (transmission_count as i32))
-                }
+                false => Some(self.first_transmission + self.interval * transmission_count),
             },
             Repeat::Infinitely => {
-                Some(self.first_transmission + self.interval * (transmission_count as i32))
+                Some(self.first_transmission + self.interval * transmission_count)
             }
         }
     }

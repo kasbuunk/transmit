@@ -144,15 +144,7 @@ impl proto::scheduler_server::Scheduler for GrpcServer {
                                 err
                             )));
                         }
-                        Ok(duration) => match chrono::Duration::from_std(duration) {
-                            Err(err) => {
-                                return Err(Status::invalid_argument(format!(
-                                    "interval is too long: {}",
-                                    err
-                                )));
-                            }
-                            Ok(dur) => dur,
-                        },
+                        Ok(duration) => duration,
                     },
                 };
 
@@ -303,8 +295,7 @@ mod tests {
                 message_proto: message_proto.clone(),
                 expected_schedule: Schedule::Interval(Interval::new(
                     now,
-                    chrono::Duration::from_std(std::time::Duration::from_secs(2))
-                        .expect("positive interval must be able to be parsed"),
+                    std::time::Duration::from_secs(2),
                     Repeat::Times(3),
                 )),
                 expected_message: expected_message.clone(),
@@ -325,8 +316,7 @@ mod tests {
                 message_proto,
                 expected_schedule: Schedule::Interval(Interval::new(
                     now,
-                    chrono::Duration::from_std(std::time::Duration::from_secs(2))
-                        .expect("positive interval must be able to be parsed"),
+                    std::time::Duration::from_secs(2),
                     Repeat::Times(3),
                 )),
                 expected_message,

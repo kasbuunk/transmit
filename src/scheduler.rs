@@ -1,11 +1,11 @@
 use std::error::Error;
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
 
 use async_trait::async_trait;
 use log::{error, info, trace, warn};
 #[cfg(test)]
 use mockall::predicate::*;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::contract::{Metrics, Now, Repository, Scheduler, Transmitter};
@@ -184,6 +184,7 @@ mod tests {
 
     use chrono::prelude::*;
     use mockall::Sequence;
+    use std::time;
     use uuid::Uuid;
 
     use crate::contract::*;
@@ -197,8 +198,8 @@ mod tests {
         let timestamp_now_clone = timestamp_now.clone();
 
         let repetitions = 5;
-        let interval = chrono::Duration::milliseconds(100);
-        let bit_later = chrono::Duration::milliseconds(10);
+        let interval = time::Duration::from_millis(100);
+        let bit_later = time::Duration::from_millis(10);
 
         let test_cases = vec![
             vec![],
@@ -268,7 +269,7 @@ mod tests {
         let timestamp_some_time_later = timestamp_now.clone() + chrono::Duration::seconds(15);
 
         let repetitions = 5;
-        let interval = chrono::Duration::seconds(30);
+        let interval = time::Duration::from_secs(30);
 
         let schedules_repeated_interval = vec![Transmission::new(
             Schedule::Interval(Interval::new(
@@ -341,7 +342,7 @@ mod tests {
         let mut metrics = MockMetrics::new();
 
         let just_now = Utc::now() - chrono::Duration::milliseconds(10);
-        let interval = chrono::Duration::milliseconds(100);
+        let interval = time::Duration::from_millis(100);
 
         let original_schedule = Transmission::new(
             Schedule::Interval(Interval::new(just_now, interval, Repeat::Infinitely)),
@@ -432,7 +433,7 @@ mod tests {
 
         let repetitions = 3;
         let just_now = Utc::now() - chrono::Duration::milliseconds(10);
-        let interval = chrono::Duration::milliseconds(100);
+        let interval = time::Duration::from_millis(100);
 
         let original_schedule = Schedule::Interval(Interval::new(
             just_now,
@@ -593,7 +594,7 @@ mod tests {
         Transmission::new(
             Schedule::Interval(Interval::new(
                 Utc::now() - chrono::Duration::milliseconds(10),
-                chrono::Duration::milliseconds(100),
+                time::Duration::from_millis(100),
                 Repeat::Infinitely,
             )),
             Message::NatsEvent(NatsEvent::new(
@@ -607,7 +608,7 @@ mod tests {
         Transmission::new(
             Schedule::Interval(Interval::new(
                 Utc::now() - chrono::Duration::milliseconds(10),
-                chrono::Duration::milliseconds(100),
+                time::Duration::from_millis(100),
                 Repeat::Times(5),
             )),
             Message::NatsEvent(NatsEvent::new(
@@ -621,7 +622,7 @@ mod tests {
         Transmission::new(
             Schedule::Interval(Interval::new(
                 Utc::now() - chrono::Duration::milliseconds(10),
-                chrono::Duration::milliseconds(100),
+                time::Duration::from_millis(100),
                 Repeat::Times(0),
             )),
             Message::NatsEvent(NatsEvent::new(
