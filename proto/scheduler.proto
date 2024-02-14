@@ -2,9 +2,25 @@ syntax = "proto3";
 package scheduler;
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
 
 service Scheduler {
 	rpc ScheduleTransmission (ScheduleTransmissionRequest) returns (ScheduleTransmissionResponse);
+}
+
+message ScheduleTransmissionRequest {
+	oneof Schedule {
+		Delayed delayed = 1;
+		Interval interval = 2;
+		Cron cron = 3;
+	}
+	oneof Message {
+		NatsEvent nats_event = 4;
+	}
+}
+
+message ScheduleTransmissionResponse {
+	string transmission_id = 1 ;
 }
 
 message NatsEvent {
@@ -16,17 +32,22 @@ message Delayed {
 	google.protobuf.Timestamp transmit_at = 1;
 }
 
-message ScheduleTransmissionRequest {
-	oneof Schedule {
-		Delayed delayed = 1;
-	}
-	oneof Message {
-		NatsEvent nats_event = 2;
+message Interval {
+	google.protobuf.Timestamp first_transmission = 1;
+	google.protobuf.Duration interval = 2;
+	oneof Repeat {
+		uint32 times = 3;
+		bool infinitely = 4;
 	}
 }
 
-message ScheduleTransmissionResponse {
-	string transmission_id = 1 ;
+message Cron {
+	google.protobuf.Timestamp first_transmission_after = 1;
+	string schedule = 2;
+	oneof Repeat {
+		uint32 times = 3;
+		bool infinitely = 4;
+	}
 }
 
 // Implement gRPC Health Checking Protocol.

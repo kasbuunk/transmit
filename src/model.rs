@@ -78,8 +78,8 @@ impl NatsEvent {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum Schedule {
     Delayed(Delayed),
-    Cron(Cron),
     Interval(Interval),
+    Cron(Cron),
 }
 
 impl Schedule {

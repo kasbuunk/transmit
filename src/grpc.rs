@@ -94,7 +94,7 @@ impl proto::scheduler_server::Scheduler for GrpcServer {
             proto::schedule_transmission_request::Schedule::Delayed(delayed) => {
                 let timestamp = match delayed.transmit_at {
                     None => {
-                        return Err(Status::invalid_argument("delayed.transmit_at is required"))
+                        return Err(Status::invalid_argument("delayed.transmit_at is required"));
                     }
                     Some(timestamp) => timestamp,
                 };
@@ -112,6 +112,69 @@ impl proto::scheduler_server::Scheduler for GrpcServer {
 
                 Schedule::Delayed(Delayed::new(timestamp_utc))
             }
+            proto::schedule_transmission_request::Schedule::Interval(interval) => {
+                let timestamp = match interval.first_transmission {
+                    None => {
+                        return Err(Status::invalid_argument(
+                            "interval.first_transmission is required",
+                        ));
+                    }
+                    Some(timestamp) => timestamp,
+                };
+                let system_time = match SystemTime::try_from(timestamp) {
+                    Err(err) => {
+                        error!("failed to parse as system time: {err}");
+
+                        return Err(Status::invalid_argument(
+                            "interval.first_transmission could not be parsed as SystemTime",
+                        ));
+                    }
+                    Ok(system_time) => system_time,
+                };
+                let timestamp_utc = DateTime::<Utc>::from(system_time);
+
+                let interval_length = match interval.interval {
+                    None => {
+                        return Err(Status::invalid_argument("interval.interval is required"));
+                    }
+                    Some(interval_length) => match std::time::Duration::try_from(interval_length) {
+                        Err(err) => {
+                            return Err(Status::invalid_argument(format!(
+                                "parsing interval.interval as std::time::Duration: {}",
+                                err
+                            )));
+                        }
+                        Ok(duration) => match chrono::Duration::from_std(duration) {
+                            Err(err) => {
+                                return Err(Status::invalid_argument(format!(
+                                    "interval is too long: {}",
+                                    err
+                                )));
+                            }
+                            Ok(dur) => dur,
+                        },
+                    },
+                };
+
+                let repeat = match interval.repeat {
+                    None => return Err(Status::invalid_argument("interval.repeat is required")),
+                    Some(repeat) => match repeat {
+                        proto::interval::Repeat::Infinitely(should_be_true) => {
+                            if !should_be_true {
+                                return Err(Status::invalid_argument(
+                                    "interval.repeat.infinitely should be true if set",
+                                ));
+                            }
+
+                            Repeat::Infinitely
+                        }
+                        proto::interval::Repeat::Times(repetitions) => Repeat::Times(repetitions),
+                    },
+                };
+
+                Schedule::Interval(Interval::new(timestamp_utc, interval_length, repeat))
+            }
+            _ => todo!(),
         };
         let message_proto = match request_data.message {
             None => return Err(Status::invalid_argument("message is required")),
@@ -184,53 +247,122 @@ mod tests {
     use crate::contract::*;
     use crate::grpc::proto::scheduler_server::Scheduler;
 
+    struct TestCase {
+        name: String,
+        schedule_proto: proto::schedule_transmission_request::Schedule,
+        message_proto: proto::schedule_transmission_request::Message,
+        expected_schedule: Schedule,
+        expected_message: Message,
+    }
+
     #[tokio::test]
-    async fn test_schedule_transmission() {
+    async fn test_schedule_interval_transmission() {
         let expected_id = uuid::uuid!("a23bfa0f-a906-429a-ab90-66322dfa72e5");
         let id_clone = expected_id.clone();
-        let mut scheduler = MockScheduler::new();
 
         let event_subject = "some_subject".to_string();
         let event_payload = Bytes::from("some_payload");
-
-        let now = Utc::now();
-        let schedule = Schedule::Delayed(Delayed::new(now));
-        let message = Message::NatsEvent(NatsEvent::new(
+        let expected_message = Message::NatsEvent(NatsEvent::new(
             event_subject.clone(),
             event_payload.clone().into(),
         ));
 
-        scheduler
-            .expect_schedule()
-            .with(eq(schedule), eq(message))
-            .return_once(move |_, _| Ok(id_clone))
-            .once();
+        let now = Utc::now();
 
-        let config = Config { port: 8081 };
-        let grpc_server = GrpcServer::new(config, Arc::new(scheduler));
+        let message_proto =
+            proto::schedule_transmission_request::Message::NatsEvent(proto::NatsEvent {
+                subject: event_subject,
+                payload: event_payload.into(),
+            });
 
-        let request = ScheduleTransmissionRequest {
-            schedule: Some(proto::schedule_transmission_request::Schedule::Delayed(
-                proto::Delayed {
-                    transmit_at: Some(std::time::SystemTime::from(now).into()),
-                },
-            )),
-            message: Some(proto::schedule_transmission_request::Message::NatsEvent(
-                proto::NatsEvent {
-                    subject: event_subject,
-                    payload: event_payload.into(),
-                },
-            )),
-        };
+        let test_cases = vec![
+            TestCase {
+                name: "delayed".to_string(),
+                schedule_proto: proto::schedule_transmission_request::Schedule::Delayed(
+                    proto::Delayed {
+                        transmit_at: Some(std::time::SystemTime::from(now).into()),
+                    },
+                ),
+                message_proto: message_proto.clone(),
+                expected_schedule: Schedule::Delayed(Delayed::new(now)),
+                expected_message: expected_message.clone(),
+            },
+            TestCase {
+                name: "interval_infinitely".to_string(),
+                schedule_proto: proto::schedule_transmission_request::Schedule::Interval(
+                    proto::Interval {
+                        first_transmission: Some(std::time::SystemTime::from(now).into()),
+                        interval: Some(
+                            std::time::Duration::from_secs(2)
+                                .try_into()
+                                .expect("interval is not too large to be prost duration"),
+                        ),
+                        repeat: Some(proto::interval::Repeat::Times(3)),
+                    },
+                ),
+                message_proto: message_proto.clone(),
+                expected_schedule: Schedule::Interval(Interval::new(
+                    now,
+                    chrono::Duration::from_std(std::time::Duration::from_secs(2))
+                        .expect("positive interval must be able to be parsed"),
+                    Repeat::Times(3),
+                )),
+                expected_message: expected_message.clone(),
+            },
+            TestCase {
+                name: "interval_times_3".to_string(),
+                schedule_proto: proto::schedule_transmission_request::Schedule::Interval(
+                    proto::Interval {
+                        first_transmission: Some(std::time::SystemTime::from(now).into()),
+                        interval: Some(
+                            std::time::Duration::from_secs(2)
+                                .try_into()
+                                .expect("interval is not too large to be prost duration"),
+                        ),
+                        repeat: Some(proto::interval::Repeat::Times(3)),
+                    },
+                ),
+                message_proto,
+                expected_schedule: Schedule::Interval(Interval::new(
+                    now,
+                    chrono::Duration::from_std(std::time::Duration::from_secs(2))
+                        .expect("positive interval must be able to be parsed"),
+                    Repeat::Times(3),
+                )),
+                expected_message,
+            },
+        ];
 
-        let response = grpc_server
-            .schedule_transmission(tonic::Request::new(request))
-            .await
-            .expect("unexpected failure");
+        for test_case in test_cases {
+            let mut scheduler = MockScheduler::new();
+            scheduler
+                .expect_schedule()
+                .with(
+                    eq(test_case.expected_schedule),
+                    eq(test_case.expected_message),
+                )
+                .return_once(move |_, _| Ok(id_clone))
+                .once();
 
-        assert_eq!(
-            response.into_inner().transmission_id,
-            expected_id.to_string()
-        );
+            let config = Config { port: 8081 };
+            let grpc_server = GrpcServer::new(config, Arc::new(scheduler));
+
+            let request = ScheduleTransmissionRequest {
+                schedule: Some(test_case.schedule_proto),
+                message: Some(test_case.message_proto),
+            };
+
+            let response = grpc_server
+                .schedule_transmission(tonic::Request::new(request))
+                .await
+                .expect("unexpected failure");
+
+            assert_eq!(
+                response.into_inner().transmission_id,
+                expected_id.to_string(),
+                "Test case failed: {}",
+                test_case.name,
+            );
+        }
     }
 }

@@ -16,7 +16,7 @@ keywords = ["transmit", "scheduler"]
 async-nats = "0.33.0"
 async-trait = "0.1.77"
 bytes = "1.5.0"
-chrono = { version = "0.4.31", features = ["serde"] }
+chrono = { version = "0.4.34", features = ["serde"] }
 cron = "0.12.0"
 env_logger = "0.11.1"
 futures = "0.3.30"
