@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -112,8 +113,8 @@ impl proto::scheduler_server::Scheduler for GrpcServer {
 
                 Schedule::Delayed(Delayed::new(timestamp_utc))
             }
-            proto::schedule_transmission_request::Schedule::Interval(interval) => {
-                let timestamp = match interval.first_transmission {
+            proto::schedule_transmission_request::Schedule::Interval(schedule) => {
+                let timestamp = match schedule.first_transmission {
                     None => {
                         return Err(Status::invalid_argument(
                             "interval.first_transmission is required",
@@ -133,7 +134,7 @@ impl proto::scheduler_server::Scheduler for GrpcServer {
                 };
                 let timestamp_utc = DateTime::<Utc>::from(system_time);
 
-                let interval_length = match interval.interval {
+                let interval_length = match schedule.interval {
                     None => {
                         return Err(Status::invalid_argument("interval.interval is required"));
                     }
@@ -148,7 +149,7 @@ impl proto::scheduler_server::Scheduler for GrpcServer {
                     },
                 };
 
-                let repeat = match interval.repeat {
+                let repeat = match schedule.repeat {
                     None => return Err(Status::invalid_argument("interval.repeat is required")),
                     Some(repeat) => match repeat {
                         proto::interval::Repeat::Infinitely(should_be_true) => {
@@ -166,7 +167,55 @@ impl proto::scheduler_server::Scheduler for GrpcServer {
 
                 Schedule::Interval(Interval::new(timestamp_utc, interval_length, repeat))
             }
-            _ => todo!(),
+            proto::schedule_transmission_request::Schedule::Cron(schedule) => {
+                let timestamp = match schedule.first_transmission_after {
+                    None => {
+                        return Err(Status::invalid_argument(
+                            "cron.first_transmission_after is required",
+                        ));
+                    }
+                    Some(timestamp) => timestamp,
+                };
+                let system_time = match SystemTime::try_from(timestamp) {
+                    Err(err) => {
+                        error!("failed to parse as system time: {err}");
+
+                        return Err(Status::invalid_argument(
+                            "cron.first_transmission_after could not be parsed as SystemTime",
+                        ));
+                    }
+                    Ok(system_time) => system_time,
+                };
+                let timestamp_utc = DateTime::<Utc>::from(system_time);
+
+                let cron_schedule = match cron::Schedule::from_str(&schedule.schedule) {
+                    Err(err) => {
+                        return Err(Status::invalid_argument(format!(
+                            "parsing cron schedule as cron::Schedule: {}",
+                            err
+                        )));
+                    }
+                    Ok(cron_schedule) => cron_schedule,
+                };
+
+                let repeat = match schedule.repeat {
+                    None => return Err(Status::invalid_argument("interval.repeat is required")),
+                    Some(repeat) => match repeat {
+                        proto::cron::Repeat::Infinitely(should_be_true) => {
+                            if !should_be_true {
+                                return Err(Status::invalid_argument(
+                                    "interval.repeat.infinitely should be true if set",
+                                ));
+                            }
+
+                            Repeat::Infinitely
+                        }
+                        proto::cron::Repeat::Times(repetitions) => Repeat::Times(repetitions),
+                    },
+                };
+
+                Schedule::Cron(Cron::new(timestamp_utc, cron_schedule, repeat))
+            }
         };
         let message_proto = match request_data.message {
             None => return Err(Status::invalid_argument("message is required")),
@@ -248,7 +297,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_schedule_interval_transmission() {
+    async fn test_schedule_transmissions() {
         let expected_id = uuid::uuid!("a23bfa0f-a906-429a-ab90-66322dfa72e5");
         let id_clone = expected_id.clone();
 
@@ -313,13 +362,29 @@ mod tests {
                         repeat: Some(proto::interval::Repeat::Times(3)),
                     },
                 ),
-                message_proto,
+                message_proto: message_proto.clone(),
                 expected_schedule: Schedule::Interval(Interval::new(
                     now,
                     std::time::Duration::from_secs(2),
                     Repeat::Times(3),
                 )),
-                expected_message,
+                expected_message: expected_message.clone(),
+            },
+            TestCase {
+                name: "cron_repeated".to_string(),
+                schedule_proto: proto::schedule_transmission_request::Schedule::Cron(proto::Cron {
+                    first_transmission_after: Some(std::time::SystemTime::from(now).into()),
+                    schedule: "0 30 9,12,15 1,15 May-Aug Mon,Wed,Fri 2018/2".to_string(),
+                    repeat: Some(proto::cron::Repeat::Times(3)),
+                }),
+                message_proto: message_proto.clone(),
+                expected_schedule: Schedule::Cron(Cron::new(
+                    now,
+                    cron::Schedule::from_str("0 30 9,12,15 1,15 May-Aug Mon,Wed,Fri 2018/2")
+                        .expect("should compile"),
+                    Repeat::Times(3),
+                )),
+                expected_message: expected_message.clone(),
             },
         ];
 
