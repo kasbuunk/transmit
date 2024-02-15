@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
+    use std::time;
 
     use chrono::prelude::*;
     use chrono::Duration;
@@ -20,24 +21,34 @@ mod tests {
     use crate::scheduler::TransmissionScheduler;
     use crate::transmitter_nats;
 
-    #[tokio::test]
     // To monitor the transmitted messages, run nats via docker with:
     // `docker run -p 4222:4222 -ti nats:latest`
     // And observe live with:
     // `nats sub -s "nats://localhost:4222" {see subject defined in test}`
+
+    #[tokio::test]
     async fn schedule_delayed_transmission() {
         let subject = "INTEGRATION.delayed_transmission";
+        let grpc_port = 50053;
         let timestamp_now = Utc::now();
         let listen_timeout_duration = std::time::Duration::from_millis(25);
 
         let transmission_timestamp = timestamp_now + Duration::seconds(30);
         let process_listen_iterations = vec![
             // First poll is too soon, expect no tranmsision.
-            (timestamp_now + Duration::seconds(10), false),
+            ("FirstTooSoon", timestamp_now + Duration::seconds(10), false),
             // Second poll is after the tranmission is due. Expect transmission.
-            (timestamp_now + Duration::seconds(60), true),
+            (
+                "SecondTransmissionDue",
+                timestamp_now + Duration::seconds(60),
+                true,
+            ),
             // Third poll is after the transmission, but that should not repeat.
-            (timestamp_now + Duration::seconds(120), false),
+            (
+                "ThirdAlreadyDone",
+                timestamp_now + Duration::seconds(120),
+                false,
+            ),
         ];
 
         let mut now = MockNow::new();
@@ -46,19 +57,10 @@ mod tests {
             now.expect_now()
                 .once()
                 .in_sequence(&mut sequence_now)
-                .returning(move || process_listen_iteration.0);
+                .returning(move || process_listen_iteration.1);
         }
 
-        let (scheduler, mut grpc_client, nats_connection) = initialise(now, 50052).await;
-
-        // Assert no transmission just yet.
-        let flag_first_listening = Arc::new(Mutex::new(false));
-        listen_for_transmission(
-            &mut nats_connection.clone(),
-            subject.into(),
-            flag_first_listening,
-        )
-        .await;
+        let (scheduler, mut grpc_client, nats_connection) = initialise(now, grpc_port).await;
 
         // Construct the grpc request, containing a schedule and message.
         let schedule_transmission_request =
@@ -79,10 +81,127 @@ mod tests {
                 subject,
                 &nats_connection,
                 listen_timeout_duration,
-                process_listen_iteration.1,
+                process_listen_iteration.2,
+                process_listen_iteration.0,
             )
             .await;
         }
+    }
+
+    #[tokio::test]
+    async fn schedule_interval_transmission() {
+        let subject = "INTEGRATION.interval_transmission";
+        let grpc_port = 50052;
+        let timestamp_now = Utc::now();
+        let listen_timeout_duration = std::time::Duration::from_millis(25);
+
+        let first_transmission_timestamp = timestamp_now + Duration::seconds(30);
+        let interval_duration = time::Duration::from_secs(10);
+        let repetitions = 3;
+        let process_listen_iterations = vec![
+            ("FirstTooSoon", timestamp_now + Duration::seconds(10), false),
+            (
+                "SecondShouldProcess",
+                timestamp_now + Duration::seconds(31),
+                true,
+            ),
+            ("ThirdTooSoon", timestamp_now + Duration::seconds(36), false),
+            (
+                "FourthShouldRepeat",
+                timestamp_now + Duration::seconds(42),
+                true,
+            ),
+            ("FifthTooSoon", timestamp_now + Duration::seconds(45), false),
+            (
+                "SixthAlreadyDone",
+                timestamp_now + Duration::seconds(51),
+                true,
+            ),
+            (
+                "SeventhAlreadyDone",
+                timestamp_now + Duration::seconds(59),
+                false,
+            ),
+            (
+                "EightAlreadyDone",
+                timestamp_now + Duration::seconds(61),
+                false,
+            ),
+            (
+                "NinthAlreadyDone",
+                timestamp_now + Duration::seconds(71),
+                false,
+            ),
+        ];
+
+        let mut now = MockNow::new();
+        let mut sequence_now = Sequence::new();
+        for process_listen_iteration in process_listen_iterations.clone() {
+            now.expect_now()
+                .once()
+                .in_sequence(&mut sequence_now)
+                .returning(move || process_listen_iteration.1);
+        }
+
+        let (scheduler, mut grpc_client, nats_connection) = initialise(now, grpc_port).await;
+
+        // Construct the grpc request, containing a schedule and message.
+        let schedule_transmission_request = new_interval_transmission_request(
+            subject.to_string(),
+            first_transmission_timestamp,
+            interval_duration,
+            repetitions,
+        );
+        let grpc_request = tonic::Request::new(schedule_transmission_request);
+
+        // Do the request.
+        let response = grpc_client
+            .schedule_transmission(grpc_request)
+            .await
+            .expect("grpc server should handle request");
+        let _ = uuid::Uuid::parse_str(&response.into_inner().transmission_id)
+            .expect("response should contain uuid");
+
+        for process_listen_iteration in process_listen_iterations {
+            process_and_listen(
+                scheduler.clone(),
+                subject,
+                &nats_connection,
+                listen_timeout_duration,
+                process_listen_iteration.2,
+                process_listen_iteration.0,
+            )
+            .await;
+        }
+    }
+
+    fn new_interval_transmission_request(
+        subject: String,
+        timestamp: DateTime<Utc>,
+        interval: time::Duration,
+        repetitions: u32,
+    ) -> grpc::proto::ScheduleTransmissionRequest {
+        let schedule = grpc::proto::Interval {
+            first_transmission: Some(std::time::SystemTime::from(timestamp).into()),
+            interval: Some(
+                interval
+                    .try_into()
+                    .expect("interval is not too large to be prost duration"),
+            ),
+            repeat: Some(grpc::proto::interval::Repeat::Times(repetitions)),
+        };
+        let schedule = grpc::proto::schedule_transmission_request::Schedule::Interval(schedule);
+        let nats_event = grpc::proto::NatsEvent {
+            subject: subject.to_string(),
+            payload: "Integration test payload.".into(),
+        };
+        let message = grpc::proto::schedule_transmission_request::Message::NatsEvent(nats_event);
+        let schedule_transmission_request = grpc::proto::ScheduleTransmissionRequest {
+            schedule: Some(schedule),
+            message: Some(message),
+        };
+
+        schedule_transmission_request
     }
 
     fn new_delayed_transmission_request(
@@ -134,7 +253,7 @@ mod tests {
             password: "postgres".into(),
             ssl: false,
         };
-        let connection = postgres::connect_to_database(postgres_config)
+        let connection = postgres::connect_to_test_database(postgres_config)
             .await
             .expect("connecting to postgres failed. Is postgres running on port 5432?");
 
@@ -240,10 +359,11 @@ mod tests {
         nats_connection: &async_nats::Client,
         listen_duration: std::time::Duration,
         expect_received: bool,
+        test_case_name: &str,
     ) {
         let received_flag_before_transmission = Arc::new(Mutex::new(false));
         let _handle = listen_for_transmission(
-            &mut nats_connection.clone(),
+            &nats_connection.clone(),
             subject.into(),
             received_flag_before_transmission.clone(),
         )
@@ -258,6 +378,6 @@ mod tests {
             }
         })
         .await;
-        assert_eq!(timeout_reached.is_ok(), expect_received);
+        assert_eq!(timeout_reached.is_ok(), expect_received, "{test_case_name}",);
     }
 }

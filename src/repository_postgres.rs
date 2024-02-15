@@ -202,7 +202,7 @@ mod tests {
             password: "postgres".into(),
             ssl: false,
         };
-        let connection = postgres::connect_to_database(config)
+        let connection = postgres::connect_to_test_database(config)
             .await
             .expect("connecting to postgres failed. Is postgres running on port 5432?");
 
