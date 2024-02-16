@@ -12,7 +12,7 @@ mod tests {
 
     use crate::contract::*;
     use crate::grpc;
-    use crate::grpc::proto::scheduler_client::SchedulerClient;
+    use crate::grpc::proto::transmit_client::TransmitClient;
     use crate::metrics;
     use crate::nats;
     use crate::postgres;
@@ -326,11 +326,11 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
-    async fn new_grpc_client(port: u16) -> SchedulerClient<tonic::transport::Channel> {
+    async fn new_grpc_client(port: u16) -> TransmitClient<tonic::transport::Channel> {
         let host = "localhost";
         let address = format!("http://{}:{}", host, port);
         // Connect to serer.
-        let grpc_client = grpc::proto::scheduler_client::SchedulerClient::connect(address)
+        let grpc_client = grpc::proto::transmit_client::TransmitClient::connect(address)
             .await
             .expect("failed to connect to grpc server");
 
@@ -342,7 +342,7 @@ mod tests {
         grpc_port: u16,
     ) -> (
         Arc<TransmissionScheduler>,
-        SchedulerClient<tonic::transport::Channel>,
+        TransmitClient<tonic::transport::Channel>,
         async_nats::Client,
     ) {
         let nats_connection = nats_connection().await;

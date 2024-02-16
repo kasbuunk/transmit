@@ -42,7 +42,7 @@ mod tests {
                     "failed to connect to grpc server on address {}",
                     &address
                 ));
-        let service = "scheduler".to_string();
+        let service = "transmit".to_string();
         let health_check_request = tonic::Request::new(grpc::proto::HealthCheckRequest { service });
         let response = health_grpc_client
             .check(health_check_request)
@@ -55,7 +55,7 @@ mod tests {
 
         // Connect to serer.
         let mut grpc_client =
-            grpc::proto::scheduler_client::SchedulerClient::connect(address.clone())
+            grpc::proto::transmit_client::TransmitClient::connect(address.clone())
                 .await
                 .expect(&format!(
                     "failed to connect to grpc server on address {}",

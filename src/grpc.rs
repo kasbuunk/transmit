@@ -17,10 +17,10 @@ use crate::contract::Scheduler;
 use crate::model::*;
 
 pub mod proto {
-    tonic::include_proto!("scheduler");
+    tonic::include_proto!("transmit");
 }
 use proto::health_server::HealthServer;
-use proto::scheduler_server::SchedulerServer;
+use proto::transmit_server::TransmitServer;
 use proto::{HealthCheckRequest, HealthCheckResponse};
 use proto::{ScheduleTransmissionRequest, ScheduleTransmissionResponse};
 
@@ -45,14 +45,14 @@ impl GrpcServer {
     pub async fn serve(&self, cancel_token: CancellationToken) -> Result<(), Box<dyn Error>> {
         let host = "0.0.0.0";
         let address = format!("{}:{}", host, self.config.port).parse()?;
-        let scheduler_server = SchedulerServer::new(self.clone());
+        let transmit_server = TransmitServer::new(self.clone());
         let health_server = HealthServer::new(self.clone());
 
         info!("Start listening for incoming messages at {}.", address);
 
         let server = Server::builder()
             .add_service(health_server)
-            .add_service(scheduler_server);
+            .add_service(transmit_server);
 
         // Create a signal channel for graceful shutdown.
         let (shutdown_sender, shutdown_receiver) = tokio::sync::oneshot::channel::<()>();
@@ -79,7 +79,7 @@ impl GrpcServer {
 }
 
 #[tonic::async_trait]
-impl proto::scheduler_server::Scheduler for GrpcServer {
+impl proto::transmit_server::Transmit for GrpcServer {
     async fn schedule_transmission(
         &self,
         request: Request<ScheduleTransmissionRequest>,
@@ -286,7 +286,7 @@ mod tests {
     use chrono::Utc;
 
     use crate::contract::*;
-    use crate::grpc::proto::scheduler_server::Scheduler;
+    use crate::grpc::proto::transmit_server::Transmit;
 
     struct TestCase {
         name: String,
