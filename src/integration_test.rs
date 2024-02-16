@@ -179,7 +179,7 @@ mod tests {
         subject: String,
         timestamp: DateTime<Utc>,
         interval: time::Duration,
-        repetitions: u32,
+        iterations: u32,
     ) -> grpc::proto::ScheduleTransmissionRequest {
         let schedule = grpc::proto::Interval {
             first_transmission: Some(std::time::SystemTime::from(timestamp).into()),
@@ -188,7 +188,7 @@ mod tests {
                     .try_into()
                     .expect("interval is not too large to be prost duration"),
             ),
-            repeat: Some(grpc::proto::interval::Repeat::Times(repetitions)),
+            iterate: Some(grpc::proto::interval::Iterate::Times(iterations)),
         };
         let schedule = grpc::proto::schedule_transmission_request::Schedule::Interval(schedule);
         let nats_event = grpc::proto::NatsEvent {

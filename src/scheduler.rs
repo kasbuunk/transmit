@@ -207,7 +207,7 @@ mod tests {
                 Schedule::Interval(Interval::new(
                     timestamp_now + bit_later,
                     interval,
-                    Repeat::Times(repetitions),
+                    Iterate::Times(repetitions),
                 )),
                 Message::NatsEvent(NatsEvent::new(
                     "SUBJECT.arbitrary".into(),
@@ -218,7 +218,7 @@ mod tests {
                 Schedule::Interval(Interval::new(
                     DateTime::<Utc>::MAX_UTC,
                     interval,
-                    Repeat::Times(repetitions),
+                    Iterate::Times(repetitions),
                 )),
                 Message::NatsEvent(NatsEvent::new(
                     "SUBJECT.arbitrary".into(),
@@ -271,11 +271,11 @@ mod tests {
         let repetitions = 5;
         let interval = time::Duration::from_secs(30);
 
-        let schedules_repeated_interval = vec![Transmission::new(
+        let schedules_iterated_interval = vec![Transmission::new(
             Schedule::Interval(Interval::new(
                 timestamp_now + chrono::Duration::seconds(10),
                 interval,
-                Repeat::Times(repetitions),
+                Iterate::Times(repetitions),
             )),
             Message::NatsEvent(NatsEvent::new(
                 "SUBJECT.arbitrary".into(),
@@ -283,7 +283,7 @@ mod tests {
             )),
         )];
         assert_eq!(
-            schedules_repeated_interval[0].next.unwrap().to_string(),
+            schedules_iterated_interval[0].next.unwrap().to_string(),
             "2015-05-15 00:00:10 UTC"
         );
 
@@ -293,12 +293,11 @@ mod tests {
             .times(1)
             .returning(move || timestamp_some_time_later);
 
-        // let schedules_repeated_interval_clone = schedules_repeated_interval.clone()
         let mut repository = MockRepository::new();
         repository
             .expect_poll_transmissions()
             .times(2)
-            .returning(move |_, _| Ok(schedules_repeated_interval.clone()));
+            .returning(move |_, _| Ok(schedules_iterated_interval.clone()));
         repository.expect_save().returning(|_| Ok(())).times(1);
 
         let mut transmitter = MockTransmitter::new();
@@ -345,7 +344,7 @@ mod tests {
         let interval = time::Duration::from_millis(100);
 
         let original_schedule = Transmission::new(
-            Schedule::Interval(Interval::new(just_now, interval, Repeat::Infinitely)),
+            Schedule::Interval(Interval::new(just_now, interval, Iterate::Infinitely)),
             Message::NatsEvent(NatsEvent::new(
                 "SUBJECT.arbitrary".into(),
                 "arbitrary payload".into(),
@@ -357,7 +356,7 @@ mod tests {
             schedule: Schedule::Interval(Interval {
                 first_transmission: just_now,
                 interval,
-                repeat: Repeat::Infinitely,
+                iterate: Iterate::Infinitely,
             }),
             next: Some(just_now + interval),
             transmission_count: 1,
@@ -368,7 +367,7 @@ mod tests {
             schedule: Schedule::Interval(Interval {
                 first_transmission: just_now,
                 interval,
-                repeat: Repeat::Infinitely,
+                iterate: Iterate::Infinitely,
             }),
             next: Some(just_now + interval + interval),
             transmission_count: 2,
@@ -379,7 +378,7 @@ mod tests {
             schedule: Schedule::Interval(Interval {
                 first_transmission: just_now,
                 interval,
-                repeat: Repeat::Infinitely,
+                iterate: Iterate::Infinitely,
             }),
             next: Some(just_now + interval + interval + interval),
             transmission_count: 3,
@@ -438,7 +437,7 @@ mod tests {
         let original_schedule = Schedule::Interval(Interval::new(
             just_now,
             interval,
-            Repeat::Times(repetitions),
+            Iterate::Times(repetitions),
         ));
         let original_transmission = Transmission::new(
             original_schedule.clone(),
@@ -595,7 +594,7 @@ mod tests {
             Schedule::Interval(Interval::new(
                 Utc::now() - chrono::Duration::milliseconds(10),
                 time::Duration::from_millis(100),
-                Repeat::Infinitely,
+                Iterate::Infinitely,
             )),
             Message::NatsEvent(NatsEvent::new(
                 "SUBJECT.arbitrary".into(),
@@ -609,7 +608,7 @@ mod tests {
             Schedule::Interval(Interval::new(
                 Utc::now() - chrono::Duration::milliseconds(10),
                 time::Duration::from_millis(100),
-                Repeat::Times(5),
+                Iterate::Times(5),
             )),
             Message::NatsEvent(NatsEvent::new(
                 "SUBJECT.arbitrary".into(),
@@ -623,7 +622,7 @@ mod tests {
             Schedule::Interval(Interval::new(
                 Utc::now() - chrono::Duration::milliseconds(10),
                 time::Duration::from_millis(100),
-                Repeat::Times(0),
+                Iterate::Times(0),
             )),
             Message::NatsEvent(NatsEvent::new(
                 "SUBJECT.arbitrary".into(),
@@ -736,9 +735,9 @@ mod tests {
                 ),
                 success: false,
             },
-            // Repeat finitely
+            // Iterate finitely
             TransmissionTestCase {
-                name: "repeat_n_times_success".into(),
+                name: "iterate_n_times_success".into(),
                 schedule: new_schedule_interval_n(),
                 transmission: Box::new(move |_| Ok(())),
                 schedule_state_transition: ScheduleStateTransition::Save(
@@ -748,7 +747,7 @@ mod tests {
                 success: true,
             },
             TransmissionTestCase {
-                name: "repeat_n_times_fail_and_reschedule".into(),
+                name: "iterate_n_times_fail_and_reschedule".into(),
                 schedule: new_schedule_interval_n(),
                 transmission: Box::new(move |_| Err("Let's hope this gets rescheduled.".into())),
                 schedule_state_transition: ScheduleStateTransition::Reschedule(
@@ -758,7 +757,7 @@ mod tests {
                 success: false,
             },
             TransmissionTestCase {
-                name: "repeat_n_times_fail_state_transition".into(),
+                name: "iterate_n_times_fail_state_transition".into(),
                 schedule: new_schedule_interval_n(),
                 transmission: Box::new(move |_| Ok(())),
                 schedule_state_transition: ScheduleStateTransition::Save(
@@ -768,7 +767,7 @@ mod tests {
                 success: false,
             },
             TransmissionTestCase {
-                name: "repeat_n_times_reschedule_fail".into(),
+                name: "iterate_n_times_reschedule_fail".into(),
                 schedule: new_schedule_interval_n(),
                 transmission: Box::new(move |_| Err("Even the reschedule hereafter fails".into())),
                 schedule_state_transition: ScheduleStateTransition::Reschedule(
@@ -777,9 +776,9 @@ mod tests {
                 ),
                 success: false,
             },
-            // Repeat for the last time.
+            // Iterate for the last time.
             TransmissionTestCase {
-                name: "repeat_last_success".into(),
+                name: "iterate_last_success".into(),
                 schedule: new_schedule_interval_last(),
                 transmission: Box::new(move |_| Ok(())),
                 schedule_state_transition: ScheduleStateTransition::Save(
@@ -789,7 +788,7 @@ mod tests {
                 success: true,
             },
             TransmissionTestCase {
-                name: "repeat_last_fail_reschedule".into(),
+                name: "iterate_last_fail_reschedule".into(),
                 schedule: new_schedule_interval_last(),
                 transmission: Box::new(move |_| Err("Let's hope this gets rescheduled.".into())),
                 schedule_state_transition: ScheduleStateTransition::Reschedule(
@@ -799,7 +798,7 @@ mod tests {
                 success: false,
             },
             TransmissionTestCase {
-                name: "repeat_last_fail_state_transition".into(),
+                name: "iterate_last_fail_state_transition".into(),
                 schedule: new_schedule_interval_last(),
                 transmission: Box::new(move |_| Ok(())),
                 schedule_state_transition: ScheduleStateTransition::Save(
@@ -809,7 +808,7 @@ mod tests {
                 success: false,
             },
             TransmissionTestCase {
-                name: "repeat_last_reschedule_fail".into(),
+                name: "iterate_last_reschedule_fail".into(),
                 schedule: new_schedule_interval_last(),
                 transmission: Box::new(move |_| Err("Even the reschedule hereafter fails".into())),
                 schedule_state_transition: ScheduleStateTransition::Reschedule(
@@ -1110,7 +1109,7 @@ mod tests {
             Schedule::Cron(Cron::new(
                 timestamp_first_poll,
                 cron_schedule.clone(),
-                Repeat::Times(5),
+                Iterate::Times(5),
             )),
             Message::NatsEvent(NatsEvent::new(
                 "SUBJECT.arbitrary".into(),
@@ -1148,7 +1147,7 @@ mod tests {
             message: schedule.message,
             schedule: Schedule::Cron(Cron {
                 first_transmission_after: timestamp_first_poll,
-                repeat: Repeat::Times(5),
+                iterate: Iterate::Times(5),
                 schedule: cron_schedule.clone(),
             }),
             next: Some(Utc.with_ymd_and_hms(2015, 5, 15, 0, 1, 5).unwrap()),

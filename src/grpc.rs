@@ -149,23 +149,23 @@ impl proto::scheduler_server::Scheduler for GrpcServer {
                     },
                 };
 
-                let repeat = match schedule.repeat {
-                    None => return Err(Status::invalid_argument("interval.repeat is required")),
-                    Some(repeat) => match repeat {
-                        proto::interval::Repeat::Infinitely(should_be_true) => {
+                let iterate = match schedule.iterate {
+                    None => return Err(Status::invalid_argument("interval.iterate is required")),
+                    Some(iterate) => match iterate {
+                        proto::interval::Iterate::Infinitely(should_be_true) => {
                             if !should_be_true {
                                 return Err(Status::invalid_argument(
-                                    "interval.repeat.infinitely should be true if set",
+                                    "interval.iterate.infinitely should be true if set",
                                 ));
                             }
 
-                            Repeat::Infinitely
+                            Iterate::Infinitely
                         }
-                        proto::interval::Repeat::Times(repetitions) => Repeat::Times(repetitions),
+                        proto::interval::Iterate::Times(iterations) => Iterate::Times(iterations),
                     },
                 };
 
-                Schedule::Interval(Interval::new(timestamp_utc, interval_length, repeat))
+                Schedule::Interval(Interval::new(timestamp_utc, interval_length, iterate))
             }
             proto::schedule_transmission_request::Schedule::Cron(schedule) => {
                 let timestamp = match schedule.first_transmission_after {
@@ -198,23 +198,23 @@ impl proto::scheduler_server::Scheduler for GrpcServer {
                     Ok(cron_schedule) => cron_schedule,
                 };
 
-                let repeat = match schedule.repeat {
-                    None => return Err(Status::invalid_argument("interval.repeat is required")),
-                    Some(repeat) => match repeat {
-                        proto::cron::Repeat::Infinitely(should_be_true) => {
+                let iterate = match schedule.iterate {
+                    None => return Err(Status::invalid_argument("interval.iterate is required")),
+                    Some(iterate) => match iterate {
+                        proto::cron::Iterate::Infinitely(should_be_true) => {
                             if !should_be_true {
                                 return Err(Status::invalid_argument(
-                                    "interval.repeat.infinitely should be true if set",
+                                    "interval.iterate.infinitely should be true if set",
                                 ));
                             }
 
-                            Repeat::Infinitely
+                            Iterate::Infinitely
                         }
-                        proto::cron::Repeat::Times(repetitions) => Repeat::Times(repetitions),
+                        proto::cron::Iterate::Times(repetitions) => Iterate::Times(repetitions),
                     },
                 };
 
-                Schedule::Cron(Cron::new(timestamp_utc, cron_schedule, repeat))
+                Schedule::Cron(Cron::new(timestamp_utc, cron_schedule, iterate))
             }
         };
         let message_proto = match request_data.message {
@@ -338,14 +338,14 @@ mod tests {
                                 .try_into()
                                 .expect("interval is not too large to be prost duration"),
                         ),
-                        repeat: Some(proto::interval::Repeat::Times(3)),
+                        iterate: Some(proto::interval::Iterate::Times(3)),
                     },
                 ),
                 message_proto: message_proto.clone(),
                 expected_schedule: Schedule::Interval(Interval::new(
                     now,
                     std::time::Duration::from_secs(2),
-                    Repeat::Times(3),
+                    Iterate::Times(3),
                 )),
                 expected_message: expected_message.clone(),
             },
@@ -359,14 +359,14 @@ mod tests {
                                 .try_into()
                                 .expect("interval is not too large to be prost duration"),
                         ),
-                        repeat: Some(proto::interval::Repeat::Times(3)),
+                        iterate: Some(proto::interval::Iterate::Times(3)),
                     },
                 ),
                 message_proto: message_proto.clone(),
                 expected_schedule: Schedule::Interval(Interval::new(
                     now,
                     std::time::Duration::from_secs(2),
-                    Repeat::Times(3),
+                    Iterate::Times(3),
                 )),
                 expected_message: expected_message.clone(),
             },
@@ -375,14 +375,14 @@ mod tests {
                 schedule_proto: proto::schedule_transmission_request::Schedule::Cron(proto::Cron {
                     first_transmission_after: Some(std::time::SystemTime::from(now).into()),
                     schedule: "0 30 9,12,15 1,15 May-Aug Mon,Wed,Fri 2018/2".to_string(),
-                    repeat: Some(proto::cron::Repeat::Times(3)),
+                    iterate: Some(proto::cron::Iterate::Times(3)),
                 }),
                 message_proto: message_proto.clone(),
                 expected_schedule: Schedule::Cron(Cron::new(
                     now,
                     cron::Schedule::from_str("0 30 9,12,15 1,15 May-Aug Mon,Wed,Fri 2018/2")
                         .expect("should compile"),
-                    Repeat::Times(3),
+                    Iterate::Times(3),
                 )),
                 expected_message: expected_message.clone(),
             },

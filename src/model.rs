@@ -119,29 +119,29 @@ impl Delayed {
 pub struct Interval {
     pub first_transmission: DateTime<Utc>,
     pub interval: time::Duration,
-    pub repeat: Repeat,
+    pub iterate: Iterate,
 }
 
 impl Interval {
     pub fn new(
         first_transmission: DateTime<Utc>,
         interval: time::Duration,
-        repeat: Repeat,
+        iterate: Iterate,
     ) -> Interval {
         Interval {
             first_transmission,
             interval,
-            repeat,
+            iterate,
         }
     }
 
     fn next(&self, transmission_count: u32) -> Option<DateTime<Utc>> {
-        match self.repeat {
-            Repeat::Times(repetitions) => match transmission_count >= repetitions {
+        match self.iterate {
+            Iterate::Times(repetitions) => match transmission_count >= repetitions {
                 true => None,
                 false => Some(self.first_transmission + self.interval * transmission_count),
             },
-            Repeat::Infinitely => {
+            Iterate::Infinitely => {
                 Some(self.first_transmission + self.interval * transmission_count)
             }
         }
@@ -153,7 +153,7 @@ pub struct Cron {
     pub first_transmission_after: DateTime<Utc>,
     #[serde(deserialize_with = "deserialize_custom_field")]
     pub schedule: cron::Schedule,
-    pub repeat: Repeat,
+    pub iterate: Iterate,
 }
 
 fn deserialize_custom_field<'de, D>(deserializer: D) -> Result<cron::Schedule, D::Error>
@@ -178,7 +178,7 @@ impl Serialize for Cron {
         // Serialize the cron schedule as a string representation
         state.serialize_field("schedule", &self.schedule.to_string())?;
 
-        state.serialize_field("repeat", &self.repeat)?;
+        state.serialize_field("iterate", &self.iterate)?;
         state.end()
     }
 }
@@ -187,25 +187,25 @@ impl Cron {
     pub fn new(
         first_transmission_after: DateTime<Utc>,
         schedule: cron::Schedule,
-        repeat: Repeat,
+        iterate: Iterate,
     ) -> Cron {
         Cron {
             first_transmission_after,
             schedule,
-            repeat,
+            iterate,
         }
     }
 
     fn next(&self, transmission_count: u32) -> Option<DateTime<Utc>> {
-        match self.repeat {
-            Repeat::Times(repetitions) => match transmission_count >= repetitions {
+        match self.iterate {
+            Iterate::Times(repetitions) => match transmission_count >= repetitions {
                 true => None,
                 false => self
                     .schedule
                     .after(&self.first_transmission_after)
                     .nth((transmission_count) as usize),
             },
-            Repeat::Infinitely => self
+            Iterate::Infinitely => self
                 .schedule
                 .after(&self.first_transmission_after)
                 .nth((transmission_count) as usize),
@@ -214,8 +214,8 @@ impl Cron {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub enum Repeat {
-    // Infinitely dictates the schedule repeats indefinitely.
+pub enum Iterate {
+    // Infinitely dictates the schedule iterates indefinitely.
     Infinitely,
     // Times contains the number of transmissions planned.
     Times(u32),
