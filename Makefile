@@ -55,3 +55,13 @@ k8s: k8sdown
 .PHONY: k8sdown
 k8sdown:
 	kind delete cluster --name e2e || echo "No cluster running named 'e2e'"
+
+.PHONY: proto
+proto: proto/transmit.proto
+	protoc --proto_path=proto --cpp_out=client/cpp transmit.proto
+	protoc --proto_path=proto --csharp_out=client/csharp transmit.proto
+	protoc --proto_path=proto --java_out=client/java transmit.proto
+	protoc --proto_path=proto --kotlin_out=client/kotlin transmit.proto
+	protoc --proto_path=proto --php_out=client/php transmit.proto
+	protoc --proto_path=proto --python_out=client/python transmit.proto
+	protoc --proto_path=proto --ruby_out=client/ruby transmit.proto
