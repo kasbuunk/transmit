@@ -58,7 +58,7 @@ k8sdown:
 
 .PHONY: proto
 proto: proto/transmit.proto
-	protoc --proto_path=proto --go_out=client/go --go_opt=Mtransmit.proto="./;transmitpb" transmit.proto
+	protoc --proto_path=proto --go_out=client/go --go_opt=Mtransmit.proto="./;transmit" --go-grpc_out=client/go --go-grpc_opt=Mtransmit.proto="./;transmit" transmit.proto
 	protoc --proto_path=proto --cpp_out=client/cpp transmit.proto
 	protoc --proto_path=proto --csharp_out=client/csharp transmit.proto
 	protoc --proto_path=proto --java_out=client/java transmit.proto
