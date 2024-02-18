@@ -174,6 +174,134 @@ mod tests {
             .await;
         }
     }
+    #[tokio::test]
+    async fn schedule_cron_transmission() {
+        let subject = "INTEGRATION.cron_transmission";
+        let grpc_port = 50054;
+        let timestamp_now: DateTime<Utc> =
+            DateTime::<Utc>::from_timestamp(1431648000, 0).expect("invalid timestamp");
+        assert_eq!(timestamp_now.to_string(), "2015-05-15 00:00:00 UTC");
+
+        let listen_timeout_duration = std::time::Duration::from_millis(25);
+
+        let first_transmission_after = timestamp_now + Duration::seconds(30);
+        let cron_schedule = "3 5 14 * * * *"; // "At 14h05:03."
+        let repetitions = 3;
+        let process_listen_iterations = vec![
+            ("TooSoon", timestamp_now + Duration::seconds(10), false),
+            (
+                "StillTooSoon",
+                timestamp_now + Duration::hours(14) + Duration::minutes(4) + Duration::seconds(59),
+                false,
+            ),
+            (
+                "ShouldProcess",
+                timestamp_now + Duration::hours(14) + Duration::minutes(5) + Duration::seconds(4),
+                true,
+            ),
+            (
+                "TooSoonAfterFirst",
+                timestamp_now + Duration::hours(28),
+                false,
+            ),
+            (
+                "ShouldProcessAgain",
+                timestamp_now
+                    + Duration::hours(14 + 24)
+                    + Duration::minutes(5)
+                    + Duration::seconds(4),
+                true,
+            ),
+            (
+                "TooSoonAfterSecond",
+                timestamp_now + Duration::hours(14 + 24 + 22),
+                false,
+            ),
+            (
+                "ShouldProcessLastTime",
+                timestamp_now
+                    + Duration::hours(14 + 2 * 24)
+                    + Duration::minutes(5)
+                    + Duration::seconds(4),
+                true,
+            ),
+            (
+                "ShouldNeverTransmitAgain",
+                timestamp_now + Duration::days(1000),
+                false,
+            ),
+        ];
+
+        let mut now = MockNow::new();
+        let mut sequence_now = Sequence::new();
+        for process_listen_iteration in process_listen_iterations.clone() {
+            now.expect_now()
+                .once()
+                .in_sequence(&mut sequence_now)
+                .returning(move || process_listen_iteration.1);
+        }
+
+        let (scheduler, mut grpc_client, nats_connection) = initialise(now, grpc_port).await;
+
+        // Construct the grpc request, containing a schedule and message.
+        let schedule_transmission_request = new_cron_transmission_request(
+            subject.to_string(),
+            first_transmission_after,
+            &cron_schedule,
+            repetitions,
+        );
+        let grpc_request = tonic::Request::new(schedule_transmission_request);
+
+        // Do the request.
+        let response = grpc_client
+            .schedule_transmission(grpc_request)
+            .await
+            .expect("grpc server should handle request");
+        let _ = uuid::Uuid::parse_str(&response.into_inner().transmission_id)
+            .expect("response should contain uuid");
+
+        for process_listen_iteration in process_listen_iterations {
+            process_and_listen(
+                scheduler.clone(),
+                subject,
+                &nats_connection,
+                listen_timeout_duration,
+                process_listen_iteration.2,
+                process_listen_iteration.0,
+            )
+            .await;
+        }
+    }
+
+    fn new_cron_transmission_request(
+        subject: String,
+        first_transmission_after: DateTime<Utc>,
+        cron_schedule: &str,
+        iterations: u32,
+    ) -> grpc::proto::ScheduleTransmissionRequest {
+        let schedule = grpc::proto::Cron {
+            first_transmission_after: Some(
+                std::time::SystemTime::from(first_transmission_after).into(),
+            ),
+            schedule: cron_schedule
+                .try_into()
+                .expect("interval is not too large to be prost duration"),
+
+            iterate: Some(grpc::proto::cron::Iterate::Times(iterations)),
+        };
+        let schedule = grpc::proto::schedule_transmission_request::Schedule::Cron(schedule);
+        let nats_event = grpc::proto::NatsEvent {
+            subject: subject.to_string(),
+            payload: "Integration test payload.".into(),
+        };
+        let message = grpc::proto::schedule_transmission_request::Message::NatsEvent(nats_event);
+        let schedule_transmission_request = grpc::proto::ScheduleTransmissionRequest {
+            schedule: Some(schedule),
+            message: Some(message),
+        };
+
+        schedule_transmission_request
+    }
 
     fn new_interval_transmission_request(
         subject: String,
