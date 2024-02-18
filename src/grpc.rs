@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -10,6 +11,7 @@ use chrono::prelude::*;
 use futures_util::FutureExt;
 use log::{error, info};
 use serde::Deserialize;
+use tokio_stream::Stream;
 use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server, Request, Response, Status};
 
@@ -252,7 +254,8 @@ impl proto::transmit_server::Transmit for GrpcServer {
 
 #[tonic::async_trait]
 impl proto::health_server::Health for GrpcServer {
-    type WatchStream = tonic::Streaming<HealthCheckResponse>;
+    type WatchStream =
+        Pin<Box<dyn Stream<Item = Result<HealthCheckResponse, Status>> + Send + 'static>>;
 
     async fn check(
         &self,
@@ -270,12 +273,17 @@ impl proto::health_server::Health for GrpcServer {
 
     async fn watch(
         &self,
-        _request: tonic::Request<HealthCheckRequest>,
-    ) -> Result<tonic::Response<Self::WatchStream>, tonic::Status> {
-        // Implement the logic to watch the health status of the specified service
-        // Here you should return a stream that notifies the client whenever the service's health status changes
-        // This could be implemented using tokio::sync::watch or any other suitable mechanism
-        unimplemented!()
+        request: Request<HealthCheckRequest>,
+    ) -> Result<Response<Self::WatchStream>, Status> {
+        let _service_name = request.get_ref().service.as_str();
+
+        let output = async_stream::try_stream! {
+            let status = ServingStatus::Serving as i32;
+
+            yield HealthCheckResponse { status }
+        };
+
+        Ok(Response::new(Box::pin(output) as Self::WatchStream))
     }
 }
 
