@@ -185,7 +185,7 @@ mod tests {
         let listen_timeout_duration = std::time::Duration::from_millis(25);
 
         let first_transmission_after = timestamp_now + Duration::seconds(30);
-        let cron_schedule = "3 5 14 * * * *"; // "At 14h05:03."
+        let cron_expression = "3 5 14 * * * *"; // "At 14h05:03."
         let repetitions = 3;
         let process_listen_iterations = vec![
             ("TooSoon", timestamp_now + Duration::seconds(10), false),
@@ -247,7 +247,7 @@ mod tests {
         let schedule_transmission_request = new_cron_transmission_request(
             subject.to_string(),
             first_transmission_after,
-            &cron_schedule,
+            &cron_expression,
             repetitions,
         );
         let grpc_request = tonic::Request::new(schedule_transmission_request);
@@ -283,7 +283,7 @@ mod tests {
             first_transmission_after: Some(
                 std::time::SystemTime::from(first_transmission_after).into(),
             ),
-            schedule: cron_schedule
+            expression: cron_schedule
                 .try_into()
                 .expect("interval is not too large to be prost duration"),
 

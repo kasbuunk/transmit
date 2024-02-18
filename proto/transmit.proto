@@ -43,7 +43,7 @@ message Interval {
 
 message Cron {
 	google.protobuf.Timestamp first_transmission_after = 1;
-	string schedule = 2;
+	string expression = 2;
 	oneof Iterate {
 		uint32 times = 3;
 		bool infinitely = 4;

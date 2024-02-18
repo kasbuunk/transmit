@@ -188,14 +188,15 @@ impl proto::transmit_server::Transmit for GrpcServer {
                 };
                 let timestamp_utc = DateTime::<Utc>::from(system_time);
 
-                let cron_schedule = match cron::Schedule::from_str(&schedule.schedule) {
+                let cron_expression = match cron::Schedule::from_str(&schedule.expression) {
                     Err(err) => {
                         return Err(Status::invalid_argument(format!(
-                            "parsing cron schedule as cron::Schedule: {}",
+                            "parsing cron schedule as cron::Schedule: {}. The format must include seven specifiers: `sec  min   hour   day of month   month   day of week   year` (including the first field for seconds and the last for years). For example: `0   30   9,12,15     1,15       May-Aug  Mon,Wed,Fri  2018/2`;
+",
                             err
                         )));
                     }
-                    Ok(cron_schedule) => cron_schedule,
+                    Ok(cron_expression) => cron_expression,
                 };
 
                 let iterate = match schedule.iterate {
@@ -214,7 +215,7 @@ impl proto::transmit_server::Transmit for GrpcServer {
                     },
                 };
 
-                Schedule::Cron(Cron::new(timestamp_utc, cron_schedule, iterate))
+                Schedule::Cron(Cron::new(timestamp_utc, cron_expression, iterate))
             }
         };
         let message_proto = match request_data.message {
@@ -374,7 +375,7 @@ mod tests {
                 name: "cron_repeated".to_string(),
                 schedule_proto: proto::schedule_transmission_request::Schedule::Cron(proto::Cron {
                     first_transmission_after: Some(std::time::SystemTime::from(now).into()),
-                    schedule: "0 30 9,12,15 1,15 May-Aug Mon,Wed,Fri 2018/2".to_string(),
+                    expression: "0 30 9,12,15 1,15 May-Aug Mon,Wed,Fri 2018/2".to_string(),
                     iterate: Some(proto::cron::Iterate::Times(3)),
                 }),
                 message_proto: message_proto.clone(),

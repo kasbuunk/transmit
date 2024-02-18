@@ -1148,7 +1148,7 @@ mod tests {
             schedule: Schedule::Cron(Cron {
                 first_transmission_after: timestamp_first_poll,
                 iterate: Iterate::Times(5),
-                schedule: cron_schedule.clone(),
+                expression: cron_schedule.clone(),
             }),
             next: Some(Utc.with_ymd_and_hms(2015, 5, 15, 0, 1, 5).unwrap()),
             transmission_count: 1,

@@ -22,7 +22,7 @@ impl Transmission {
             Schedule::Delayed(ref delayed) => Some(delayed.transmit_at),
             Schedule::Interval(ref interval) => Some(interval.first_transmission),
             Schedule::Cron(ref cron_schedule) => cron_schedule
-                .schedule
+                .expression
                 .after(&cron_schedule.first_transmission_after)
                 .next(),
         };
@@ -152,7 +152,7 @@ impl Interval {
 pub struct Cron {
     pub first_transmission_after: DateTime<Utc>,
     #[serde(deserialize_with = "deserialize_custom_field")]
-    pub schedule: cron::Schedule,
+    pub expression: cron::Schedule,
     pub iterate: Iterate,
 }
 
@@ -176,7 +176,7 @@ impl Serialize for Cron {
         state.serialize_field("first_transmission_after", &self.first_transmission_after)?;
 
         // Serialize the cron schedule as a string representation
-        state.serialize_field("schedule", &self.schedule.to_string())?;
+        state.serialize_field("expression", &self.expression.to_string())?;
 
         state.serialize_field("iterate", &self.iterate)?;
         state.end()
@@ -186,12 +186,12 @@ impl Serialize for Cron {
 impl Cron {
     pub fn new(
         first_transmission_after: DateTime<Utc>,
-        schedule: cron::Schedule,
+        expression: cron::Schedule,
         iterate: Iterate,
     ) -> Cron {
         Cron {
             first_transmission_after,
-            schedule,
+            expression,
             iterate,
         }
     }
@@ -201,12 +201,12 @@ impl Cron {
             Iterate::Times(repetitions) => match transmission_count >= repetitions {
                 true => None,
                 false => self
-                    .schedule
+                    .expression
                     .after(&self.first_transmission_after)
                     .nth((transmission_count) as usize),
             },
             Iterate::Infinitely => self
-                .schedule
+                .expression
                 .after(&self.first_transmission_after)
                 .nth((transmission_count) as usize),
         }
