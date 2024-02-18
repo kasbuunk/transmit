@@ -28,7 +28,8 @@ e2esetup:
 
 .PHONY: e2etest
 e2etest:
-	cargo test --test end_to_end
+	cargo test --test end_to_end # End-to-end tests in Rust.
+	(cd client/go; go test) # Test Go client.
 
 .PHONY: e2edown
 e2edown:
