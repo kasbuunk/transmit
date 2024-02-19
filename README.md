@@ -1,5 +1,7 @@
 # Transmit
 
+![Transmit](https://github.com/kasbuunk/transmit/assets/20124087/fec16493-9561-4730-bc2c-0d2d929682fe)
+
 _This project is licensed under the MIT License._
 
 Transmit is a program designed for reliable scheduling and transmission of delayed and periodic messages. It is built with a modular architecture and agnostic design, allowing for seamless integration into various deployment environments.
