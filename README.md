@@ -8,19 +8,19 @@ Transmit is a program designed for reliable scheduling and transmission of delay
 
 Key Features:
 
-- Flexible Scheduling: Supports Delayed, Interval, and Cron schedules, offering diverse transmission options.
-- Reliable Delivery: Ensures messages reach their destination through robust transmission adapters like Nats.
-- Data Integrity: Secures message data during transmission and storage with configurable adapters like in-memory and Postgres.
-- Adaptable Deployment: Runs as a standalone binary, Docker container, or Kubernetes microservice, catering to different needs.
-- Comprehensive Configuration: Provides a dedicated algebraic data structure as configuration for easy setup and customization.
-- Detailed Monitoring: Integrates with Prometheus metrics for insights into program behaviour and performance.
+- Flexible Scheduling: Supports Delayed, Interval, and Cron schedules, with provided number of iterations.
+- Reliable Delivery: Ensures messages reach their destination through robust transmission adapters with fault-tolerant exactly-once delivery.
+- Data Integrity: Secures message data during transmission and storage with configurable adapters appropriate for its deployment environment, like in-memory and Postgres.
+- Adaptable Deployment: Runs as a standalone binary, Docker container, or Kubernetes microservice.
+- Comprehensive Configuration: Provides a dedicated algebraic data structure for correct configuration.
+- Observability: Integrates with Prometheus metrics for insights into program behaviour and performance.
 - Health Checks: Implements the [gRPC Health Checking Protocol](https://github.com/grpc/grpc/blob/master/doc/health-checking.md) for monitoring service health.
 - Graceful Shutdown: Handles termination signals (SIGINT, SIGTERM) for proper program closure.
-- Rigorous Testing: Emphasizes thorough testing practices to ensure reliability and stability.
+- Rigorous Testing: Emphasizes thorough unit, integration and end-to-end testing practices to ensure reliability and stability.
 
 ## Installation
 
-### Stand-alone binary
+### Standalone binary
 
 Currently, the defined binary application only supports a postgres repository and nats transmitter adapters. It is hence required that these are running and accessible on the host and ports defined in your provided configuration file.
 
@@ -35,6 +35,7 @@ cp transmit
 make setup
 
 # Install
+# The Rust toolchain includes cargo can be installed [here](https://www.rust-lang.org/tools/install).
 cargo install transmit
 
 # Copy the configuration file.
@@ -56,11 +57,13 @@ The primary deployment environment for which this program is designed, is to run
 
 To deploy with helm, run the following.
 
-```
+```sh
 # Add the helm repository.
 helm repo add transmit https://kasbuunk.github.io/transmit
 
-# Install the release. N.B.: make sure the required dependencies (Nats and Postgres) are deployed and accepting connections on the configured ports, with the configurable Postgres connection credentials.
+# Install the release. N.B.: make sure the required dependencies (Nats and Postgres)
+# are deployed and accepting connections on the configured ports, with the configurable
+# Postgres connection credentials.
 helm install transmit transmit/transmit --values tests/values.yaml # Replace with your configuration.
 ```
 
