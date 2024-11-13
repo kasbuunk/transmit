@@ -1,5 +1,5 @@
 # Stage 1: Build the binary
-FROM --platform=linux/amd64 rust:1.75.0-bookworm AS builder
+FROM --platform=linux/amd64 rust:1.82.0-bookworm AS builder
 
 # Install Protocol Buffers compiler.
 RUN apt-get update && apt-get install -y protobuf-compiler
