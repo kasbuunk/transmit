@@ -1,7 +1,7 @@
 DOCKER_COMPOSE_FILE := docker-compose.yaml
-DOCKER_COMPOSE := docker-compose -f $(DOCKER_COMPOSE_FILE)
+DOCKER_COMPOSE := docker compose -f $(DOCKER_COMPOSE_FILE)
 DOCKER_COMPOSE_FILE_E2E := tests/docker-compose.yaml
-DOCKER_COMPOSE_E2E := docker-compose -f $(DOCKER_COMPOSE_FILE_E2E)
+DOCKER_COMPOSE_E2E := docker compose -f $(DOCKER_COMPOSE_FILE_E2E)
 
 .PHONY: setup
 setup:
