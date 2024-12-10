@@ -643,7 +643,6 @@ mod tests {
 
     struct TransmissionTestCase {
         name: String,
-        schedule: Transmission,
         transmission:
             Box<dyn Fn(Message) -> Result<(), Box<dyn Error + Send + Sync + 'static>> + Send>,
         schedule_state_transition: ScheduleStateTransition,
@@ -653,10 +652,8 @@ mod tests {
     #[tokio::test]
     async fn test_transmission_and_appropriate_state_transition() {
         let test_cases = vec![
-            // Delayed transmissions.
             TransmissionTestCase {
-                name: "delayed_success".into(),
-                schedule: new_transmission_delayed(),
+                name: "success".into(),
                 transmission: Box::new(move |_| Ok(())),
                 schedule_state_transition: ScheduleStateTransition::Save(
                     Box::new(move |_| Ok(())),
@@ -665,8 +662,7 @@ mod tests {
                 success: true,
             },
             TransmissionTestCase {
-                name: "delayed_fail_and_reschedule".into(),
-                schedule: new_transmission_delayed(),
+                name: "fail_and_reschedule".into(),
                 transmission: Box::new(move |_| Err("Let's hope this gets rescheduled.".into())),
                 schedule_state_transition: ScheduleStateTransition::Reschedule(
                     Box::new(move |_| Ok(())),
@@ -675,8 +671,7 @@ mod tests {
                 success: false,
             },
             TransmissionTestCase {
-                name: "delayed_transmit_but_fail_mark_done".into(),
-                schedule: new_transmission_delayed(),
+                name: "transmit_but_fail_mark_done".into(),
                 transmission: Box::new(move |_| Ok(())),
                 schedule_state_transition: ScheduleStateTransition::Save(
                     Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
@@ -685,131 +680,7 @@ mod tests {
                 success: false,
             },
             TransmissionTestCase {
-                name: "delayed_transmit_fail_and_reschedule_fail".into(),
-                schedule: new_transmission_delayed(),
-                transmission: Box::new(move |_| Err("Even the reschedule hereafter fails".into())),
-                schedule_state_transition: ScheduleStateTransition::Reschedule(
-                    Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
-                    false,
-                ),
-                success: false,
-            },
-            // Periodic interval schedules.
-            TransmissionTestCase {
-                name: "periodic_success".into(),
-                schedule: new_schedule_interval_infinitely(),
-                transmission: Box::new(move |_| Ok(())),
-                schedule_state_transition: ScheduleStateTransition::Save(
-                    Box::new(move |_| Ok(())),
-                    true,
-                ),
-                success: true,
-            },
-            TransmissionTestCase {
-                name: "periodic_fail_and_reschedule".into(),
-                schedule: new_schedule_interval_infinitely(),
-                transmission: Box::new(move |_| Err("Let's hope this gets rescheduled.".into())),
-                schedule_state_transition: ScheduleStateTransition::Reschedule(
-                    Box::new(move |_| Ok(())),
-                    true,
-                ),
-                success: false,
-            },
-            TransmissionTestCase {
-                name: "periodic_transmit_but_fail_state_transition".into(),
-                schedule: new_schedule_interval_infinitely(),
-                transmission: Box::new(move |_| Ok(())),
-                schedule_state_transition: ScheduleStateTransition::Save(
-                    Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
-                    false,
-                ),
-                success: false,
-            },
-            TransmissionTestCase {
-                name: "periodic_transmit_fail_and_reschedule_fail".into(),
-                schedule: new_schedule_interval_infinitely(),
-                transmission: Box::new(move |_| Err("Even the reschedule hereafter fails".into())),
-                schedule_state_transition: ScheduleStateTransition::Reschedule(
-                    Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
-                    false,
-                ),
-                success: false,
-            },
-            // Iterate finitely
-            TransmissionTestCase {
-                name: "iterate_n_times_success".into(),
-                schedule: new_schedule_interval_n(),
-                transmission: Box::new(move |_| Ok(())),
-                schedule_state_transition: ScheduleStateTransition::Save(
-                    Box::new(move |_| Ok(())),
-                    true,
-                ),
-                success: true,
-            },
-            TransmissionTestCase {
-                name: "iterate_n_times_fail_and_reschedule".into(),
-                schedule: new_schedule_interval_n(),
-                transmission: Box::new(move |_| Err("Let's hope this gets rescheduled.".into())),
-                schedule_state_transition: ScheduleStateTransition::Reschedule(
-                    Box::new(move |_| Ok(())),
-                    true,
-                ),
-                success: false,
-            },
-            TransmissionTestCase {
-                name: "iterate_n_times_fail_state_transition".into(),
-                schedule: new_schedule_interval_n(),
-                transmission: Box::new(move |_| Ok(())),
-                schedule_state_transition: ScheduleStateTransition::Save(
-                    Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
-                    false,
-                ),
-                success: false,
-            },
-            TransmissionTestCase {
-                name: "iterate_n_times_reschedule_fail".into(),
-                schedule: new_schedule_interval_n(),
-                transmission: Box::new(move |_| Err("Even the reschedule hereafter fails".into())),
-                schedule_state_transition: ScheduleStateTransition::Reschedule(
-                    Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
-                    false,
-                ),
-                success: false,
-            },
-            // Iterate for the last time.
-            TransmissionTestCase {
-                name: "iterate_last_success".into(),
-                schedule: new_schedule_interval_last(),
-                transmission: Box::new(move |_| Ok(())),
-                schedule_state_transition: ScheduleStateTransition::Save(
-                    Box::new(move |_| Ok(())),
-                    true,
-                ),
-                success: true,
-            },
-            TransmissionTestCase {
-                name: "iterate_last_fail_reschedule".into(),
-                schedule: new_schedule_interval_last(),
-                transmission: Box::new(move |_| Err("Let's hope this gets rescheduled.".into())),
-                schedule_state_transition: ScheduleStateTransition::Reschedule(
-                    Box::new(move |_| Ok(())),
-                    true,
-                ),
-                success: false,
-            },
-            TransmissionTestCase {
-                name: "iterate_last_fail_state_transition".into(),
-                schedule: new_schedule_interval_last(),
-                transmission: Box::new(move |_| Ok(())),
-                schedule_state_transition: ScheduleStateTransition::Save(
-                    Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
-                    false,
-                ),
-                success: false,
-            },
-            TransmissionTestCase {
-                name: "iterate_last_reschedule_fail".into(),
-                schedule: new_schedule_interval_last(),
+                name: "transmit_fail_and_reschedule_fail".into(),
                 transmission: Box::new(move |_| Err("Even the reschedule hereafter fails".into())),
                 schedule_state_transition: ScheduleStateTransition::Reschedule(
                     Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
@@ -855,7 +726,7 @@ mod tests {
                 Arc::new(metrics),
             );
 
-            let result = scheduler.transmit(&test_case.schedule).await;
+            let result = scheduler.transmit(&new_transmission_delayed()).await;
             assert_eq!(
                 result.is_ok(),
                 test_case.success,
