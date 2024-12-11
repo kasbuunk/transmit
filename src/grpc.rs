@@ -243,6 +243,15 @@ impl proto::transmit_server::Transmit for GrpcServer {
                     transmission_id: id.to_string(),
                 }))
             }
+            Err(ScheduleError::AgedSchedule) => Err(Status::invalid_argument(
+                "aged schedule; provide a timestamp in the future",
+            )),
+            Err(ScheduleError::TooShortInterval) => Err(Status::invalid_argument(
+                "too short interval; provide a greater duration between transmissions",
+            )),
+            Err(ScheduleError::NatsInvalidSubject) => Err(Status::invalid_argument(
+                "provided nats subject not allowed",
+            )),
             Err(err) => {
                 error!("Failed to schedule message: {err}");
 

@@ -2,16 +2,21 @@ use std::error::Error;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::prelude::*;
 use log::{error, info, trace, warn};
 #[cfg(test)]
 use mockall::predicate::*;
+use std::time;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::contract::{Metrics, Now, Repository, Scheduler, Transmitter};
-use crate::model::{Message, MetricEvent, Schedule, Transmission};
+use crate::model::{Message, MetricEvent, Schedule, ScheduleError, Transmission};
 
 static BATCH_SIZE: u32 = 100;
+static MAX_DELAYED_AGE: chrono::Duration = chrono::Duration::seconds(1);
+static MIN_INTERVAL: time::Duration = time::Duration::from_millis(10);
+static MAX_NATS_SUBJECT_LENGTH: u32 = 256;
 
 #[derive(Clone)]
 pub struct TransmissionScheduler {
@@ -28,17 +33,80 @@ pub struct TransmissionScheduler {
 
 #[async_trait]
 impl Scheduler for TransmissionScheduler {
-    async fn schedule(&self, when: Schedule, what: Message) -> Result<Uuid, Box<dyn Error>> {
-        let schedule = Transmission::new(when, what);
-        match self.repository.store_transmission(&schedule).await {
+    async fn schedule(&self, when: Schedule, what: Message) -> Result<Uuid, ScheduleError> {
+        validate_schedule(self.now.now(), &when)?;
+        validate_message(&what)?;
+
+        let transmission = Transmission::new(when, what);
+        match self.repository.store_transmission(&transmission).await {
             Ok(_) => {
                 self.metrics.count(MetricEvent::Scheduled(true));
-                Ok(schedule.id)
+                Ok(transmission.id)
             }
             Err(err) => {
                 self.metrics.count(MetricEvent::Scheduled(false));
-                Err(err)
+                Err(ScheduleError::Other(err))
             }
+        }
+    }
+}
+
+fn validate_schedule(now: DateTime<Utc>, schedule: &Schedule) -> Result<(), ScheduleError> {
+    match schedule {
+        Schedule::Delayed(delayed) => {
+            if delayed.transmit_at - now < -MAX_DELAYED_AGE {
+                return Err(ScheduleError::AgedSchedule);
+            }
+
+            Ok(())
+        }
+        Schedule::Interval(interval) => {
+            if interval.first_transmission - now < -MAX_DELAYED_AGE {
+                return Err(ScheduleError::AgedSchedule);
+            }
+            if interval.interval < MIN_INTERVAL {
+                return Err(ScheduleError::TooShortInterval);
+            }
+
+            Ok(())
+        }
+        Schedule::Cron(cron_schedule) => {
+            if cron_schedule.first_transmission_after - now < -MAX_DELAYED_AGE {
+                return Err(ScheduleError::AgedSchedule);
+            }
+
+            Ok(())
+        }
+    }
+}
+fn validate_message(message: &Message) -> Result<(), ScheduleError> {
+    match message {
+        Message::NatsEvent(event) => {
+            if event.subject.len() as u32 > MAX_NATS_SUBJECT_LENGTH {
+                return Err(ScheduleError::NatsInvalidSubject);
+            }
+
+            if let Some('$') = event.subject.chars().next() {
+                return Err(ScheduleError::NatsInvalidSubject);
+            }
+
+            if event.subject.contains('\0') {
+                return Err(ScheduleError::NatsInvalidSubject);
+            }
+
+            if event.subject.contains(' ') {
+                return Err(ScheduleError::NatsInvalidSubject);
+            }
+
+            if event.subject.contains('>') {
+                return Err(ScheduleError::NatsInvalidSubject);
+            }
+
+            if event.subject.contains('*') {
+                return Err(ScheduleError::NatsInvalidSubject);
+            }
+
+            Ok(())
         }
     }
 }
@@ -82,7 +150,7 @@ impl TransmissionScheduler {
     }
 
     // process_batch retrieves schedules that are overdue, and in scheduled state. It transitions them
-    // to doing/queued, calls transmits them and then transitions it back to scheduled, done or
+    // to doing/queued, transmits them and then transitions them back to scheduled, done or
     // error. Or, errors should have a separate thing. We don't want any errors to meddle with
     // things that may errored as a one-off problem; likewise we need errors to be transparent by
     // metrics and logging.
@@ -182,7 +250,6 @@ mod tests {
 
     use std::str::FromStr;
 
-    use chrono::prelude::*;
     use mockall::Sequence;
     use std::time;
     use uuid::Uuid;
@@ -577,6 +644,18 @@ mod tests {
         ))
     }
 
+    fn new_delayed(now: DateTime<Utc>) -> Schedule {
+        Schedule::Delayed(Delayed::new(now))
+    }
+
+    fn new_interval_infinite(now: DateTime<Utc>) -> Schedule {
+        Schedule::Interval(Interval::new(
+            now,
+            time::Duration::from_millis(100),
+            Iterate::Infinitely,
+        ))
+    }
+
     fn new_transmission_delayed() -> Transmission {
         Transmission::new(
             Schedule::Delayed(Delayed::new(
@@ -601,6 +680,13 @@ mod tests {
                 "arbitrary payload".into(),
             )),
         )
+    }
+
+    fn new_nats_message() -> Message {
+        Message::NatsEvent(NatsEvent::new(
+            "SUBJECT.arbitrary".into(),
+            "arbitrary payload".into(),
+        ))
     }
 
     fn new_schedule_interval_n() -> Transmission {
@@ -629,6 +715,14 @@ mod tests {
                 "arbitrary payload".into(),
             )),
         )
+    }
+
+    fn new_schedule_cron(now: DateTime<Utc>) -> Schedule {
+        let expression = "5 * * * May Fri 2015";
+        let cron_schedule =
+            cron::Schedule::from_str(expression).expect("should be valid cron schedule");
+
+        Schedule::Cron(Cron::new(now, cron_schedule.clone(), Iterate::Infinitely))
     }
 
     type ScheduleSaveFn =
@@ -1075,5 +1169,169 @@ mod tests {
         // Second poll.
         let result = scheduler.process_batch().await;
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_message() {
+        struct TestCase {
+            name: String,
+            message: Message,
+            expected_result: Result<(), ScheduleError>,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: String::from("valid nats"),
+                message: new_nats_message(),
+                expected_result: Ok(()),
+            },
+            TestCase {
+                name: String::from("nats too large subject"),
+                message: Message::NatsEvent(NatsEvent::new(
+                    String::from("C".repeat((MAX_NATS_SUBJECT_LENGTH + 1) as usize)),
+                    "arbitrary payload".into(),
+                )),
+                expected_result: Err(ScheduleError::NatsInvalidSubject),
+            },
+            TestCase {
+                name: String::from("start with $"),
+                message: Message::NatsEvent(NatsEvent::new(
+                    String::from("$reserved"),
+                    "arbitrary payload".into(),
+                )),
+                expected_result: Err(ScheduleError::NatsInvalidSubject),
+            },
+            TestCase {
+                name: String::from("contains null"),
+                message: Message::NatsEvent(NatsEvent::new(
+                    String::from("HAS.\0null"),
+                    "arbitrary payload".into(),
+                )),
+                expected_result: Err(ScheduleError::NatsInvalidSubject),
+            },
+            TestCase {
+                name: String::from("contains space"),
+                message: Message::NatsEvent(NatsEvent::new(
+                    String::from("HAS space"),
+                    "arbitrary payload".into(),
+                )),
+                expected_result: Err(ScheduleError::NatsInvalidSubject),
+            },
+            TestCase {
+                name: String::from("contains *"),
+                message: Message::NatsEvent(NatsEvent::new(
+                    String::from("HAS.*asterisk"),
+                    "arbitrary payload".into(),
+                )),
+                expected_result: Err(ScheduleError::NatsInvalidSubject),
+            },
+            TestCase {
+                name: String::from("contains >"),
+                message: Message::NatsEvent(NatsEvent::new(
+                    String::from("HAS.>gt"),
+                    "arbitrary payload".into(),
+                )),
+                expected_result: Err(ScheduleError::NatsInvalidSubject),
+            },
+        ];
+
+        for test_case in test_cases {
+            let valid = validate_message(&test_case.message);
+            match test_case.expected_result {
+                Ok(()) => assert!(
+                    valid.is_ok(),
+                    "{}: expected schedule to be valid",
+                    test_case.name
+                ),
+                Err(expected_err) => {
+                    let actual_err = valid.expect_err("expect validation error");
+                    assert_eq!(
+                        expected_err, actual_err,
+                        "{}: expected schedule to be invalid",
+                        test_case.name
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn test_validate_schedule() {
+        let now = DateTime::from_timestamp(1431648000, 0).expect("should be valid timestamp");
+        let long_ago = now - chrono::Duration::hours(1);
+
+        struct TestCase {
+            name: String,
+            schedule: Schedule,
+            expected_result: Result<(), ScheduleError>,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: String::from("valid delayed"),
+                schedule: new_delayed(now),
+                expected_result: Ok(()),
+            },
+            TestCase {
+                name: String::from("aged delayed"),
+                schedule: new_delayed(long_ago),
+                expected_result: Err(ScheduleError::AgedSchedule),
+            },
+            TestCase {
+                name: String::from("valid interval"),
+                schedule: Schedule::Interval(Interval::new(
+                    now,
+                    time::Duration::from_millis(100),
+                    Iterate::Infinitely,
+                )),
+                expected_result: Ok(()),
+            },
+            TestCase {
+                name: String::from("aged interval"),
+                schedule: Schedule::Interval(Interval::new(
+                    long_ago,
+                    time::Duration::from_millis(100),
+                    Iterate::Infinitely,
+                )),
+                expected_result: Err(ScheduleError::AgedSchedule),
+            },
+            TestCase {
+                name: String::from("too short interval"),
+                schedule: Schedule::Interval(Interval::new(
+                    now,
+                    time::Duration::from_nanos(10),
+                    Iterate::Infinitely,
+                )),
+                expected_result: Err(ScheduleError::TooShortInterval),
+            },
+            TestCase {
+                name: String::from("valid cron"),
+                schedule: new_schedule_cron(now),
+                expected_result: Ok(()),
+            },
+            TestCase {
+                name: String::from("aged cron"),
+                schedule: new_schedule_cron(long_ago),
+                expected_result: Err(ScheduleError::AgedSchedule),
+            },
+        ];
+
+        for test_case in test_cases {
+            let valid = validate_schedule(now, &test_case.schedule);
+            match test_case.expected_result {
+                Ok(()) => assert!(
+                    valid.is_ok(),
+                    "{}: expected schedule to be valid",
+                    test_case.name
+                ),
+                Err(expected_err) => {
+                    let actual_err = valid.expect_err("expect validation error");
+                    assert_eq!(
+                        expected_err, actual_err,
+                        "{}: expected schedule to be invalid",
+                        test_case.name
+                    );
+                }
+            }
+        }
     }
 }

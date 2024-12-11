@@ -7,12 +7,12 @@ use chrono::prelude::*;
 use mockall::{automock, mock, predicate::*};
 use uuid::Uuid;
 
-use crate::model::{Message, MetricEvent, Schedule, Transmission};
+use crate::model::{Message, MetricEvent, Schedule, ScheduleError, Transmission};
 
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait Scheduler: Send + Sync {
-    async fn schedule(&self, schedule: Schedule, message: Message) -> Result<Uuid, Box<dyn Error>>;
+    async fn schedule(&self, schedule: Schedule, message: Message) -> Result<Uuid, ScheduleError>;
 }
 
 #[cfg_attr(test, automock)]
