@@ -53,6 +53,13 @@ mod tests {
 
         let mut now = MockNow::new();
         let mut sequence_now = Sequence::new();
+
+        // Expect call for validation.
+        now.expect_now()
+            .once()
+            .in_sequence(&mut sequence_now)
+            .returning(move || timestamp_now);
+
         for process_listen_iteration in process_listen_iterations.clone() {
             now.expect_now()
                 .once()
@@ -136,6 +143,13 @@ mod tests {
 
         let mut now = MockNow::new();
         let mut sequence_now = Sequence::new();
+
+        // Expect call for validation.
+        now.expect_now()
+            .once()
+            .in_sequence(&mut sequence_now)
+            .returning(move || timestamp_now);
+
         for process_listen_iteration in process_listen_iterations.clone() {
             now.expect_now()
                 .once()
@@ -234,6 +248,13 @@ mod tests {
 
         let mut now = MockNow::new();
         let mut sequence_now = Sequence::new();
+
+        // Expect call for validation.
+        now.expect_now()
+            .once()
+            .in_sequence(&mut sequence_now)
+            .returning(move || timestamp_now);
+
         for process_listen_iteration in process_listen_iterations.clone() {
             now.expect_now()
                 .once()

@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::fmt;
 use std::str::FromStr;
 use std::time;
 
@@ -98,7 +99,7 @@ impl Schedule {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Delayed {
-    transmit_at: DateTime<Utc>,
+    pub transmit_at: DateTime<Utc>,
 }
 
 impl Delayed {
@@ -219,6 +220,49 @@ pub enum Iterate {
     Infinitely,
     // Times contains the number of transmissions planned.
     Times(u32),
+}
+
+#[derive(Debug)]
+pub enum ScheduleError {
+    AgedSchedule,
+    TooShortInterval,
+    NatsInvalidSubject,
+    Other(Box<dyn Error>),
+}
+
+impl fmt::Display for ScheduleError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ScheduleError::AgedSchedule => {
+                write!(f, "first transmission should not be in the past")
+            }
+            ScheduleError::TooShortInterval => write!(f, "interval must be sufficiently large"),
+            ScheduleError::NatsInvalidSubject => {
+                write!(f, "subject not allowed")
+            }
+            ScheduleError::Other(err) => write!(f, "err: {}", err),
+        }
+    }
+}
+
+impl PartialEq for ScheduleError {
+    fn eq(&self, other: &Self) -> bool {
+        match self {
+            ScheduleError::AgedSchedule => match other {
+                ScheduleError::AgedSchedule => true,
+                _ => false,
+            },
+            ScheduleError::TooShortInterval => match other {
+                ScheduleError::TooShortInterval => true,
+                _ => false,
+            },
+            ScheduleError::NatsInvalidSubject => match other {
+                ScheduleError::NatsInvalidSubject => true,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
