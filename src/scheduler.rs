@@ -668,7 +668,7 @@ mod tests {
         )
     }
 
-    fn new_schedule_interval_infinitely() -> Transmission {
+    fn new_transmission_infinite() -> Transmission {
         Transmission::new(
             Schedule::Interval(Interval::new(
                 Utc::now() - chrono::Duration::milliseconds(10),
@@ -682,14 +682,7 @@ mod tests {
         )
     }
 
-    fn new_nats_message() -> Message {
-        Message::NatsEvent(NatsEvent::new(
-            "SUBJECT.arbitrary".into(),
-            "arbitrary payload".into(),
-        ))
-    }
-
-    fn new_schedule_interval_n() -> Transmission {
+    fn new_transmission_interval_n() -> Transmission {
         Transmission::new(
             Schedule::Interval(Interval::new(
                 Utc::now() - chrono::Duration::milliseconds(10),
@@ -703,7 +696,7 @@ mod tests {
         )
     }
 
-    fn new_schedule_interval_last() -> Transmission {
+    fn new_transmission_interval_last() -> Transmission {
         Transmission::new(
             Schedule::Interval(Interval::new(
                 Utc::now() - chrono::Duration::milliseconds(10),
@@ -717,12 +710,29 @@ mod tests {
         )
     }
 
+    fn new_transmission_cron() -> Transmission {
+        Transmission::new(
+            new_schedule_cron(Utc::now() - chrono::Duration::milliseconds(10)),
+            Message::NatsEvent(NatsEvent::new(
+                "SUBJECT.arbitrary".into(),
+                "arbitrary payload".into(),
+            )),
+        )
+    }
+
     fn new_schedule_cron(now: DateTime<Utc>) -> Schedule {
-        let expression = "5 * * * May Fri 2015";
+        let expression = "5 * * * May Fri *";
         let cron_schedule =
             cron::Schedule::from_str(expression).expect("should be valid cron schedule");
 
         Schedule::Cron(Cron::new(now, cron_schedule.clone(), Iterate::Infinitely))
+    }
+
+    fn new_nats_message() -> Message {
+        Message::NatsEvent(NatsEvent::new(
+            "SUBJECT.arbitrary".into(),
+            "arbitrary payload".into(),
+        ))
     }
 
     type ScheduleSaveFn =
@@ -737,7 +747,7 @@ mod tests {
 
     struct TransmissionTestCase {
         name: String,
-        transmission:
+        transmission_response:
             Box<dyn Fn(Message) -> Result<(), Box<dyn Error + Send + Sync + 'static>> + Send>,
         schedule_state_transition: ScheduleStateTransition,
         success: bool,
@@ -745,88 +755,102 @@ mod tests {
 
     #[tokio::test]
     async fn test_transmission_and_appropriate_state_transition() {
-        let test_cases = vec![
-            TransmissionTestCase {
-                name: "success".into(),
-                transmission: Box::new(move |_| Ok(())),
-                schedule_state_transition: ScheduleStateTransition::Save(
-                    Box::new(move |_| Ok(())),
-                    true,
-                ),
-                success: true,
-            },
-            TransmissionTestCase {
-                name: "fail_and_reschedule".into(),
-                transmission: Box::new(move |_| Err("Let's hope this gets rescheduled.".into())),
-                schedule_state_transition: ScheduleStateTransition::Reschedule(
-                    Box::new(move |_| Ok(())),
-                    true,
-                ),
-                success: false,
-            },
-            TransmissionTestCase {
-                name: "transmit_but_fail_mark_done".into(),
-                transmission: Box::new(move |_| Ok(())),
-                schedule_state_transition: ScheduleStateTransition::Save(
-                    Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
-                    false,
-                ),
-                success: false,
-            },
-            TransmissionTestCase {
-                name: "transmit_fail_and_reschedule_fail".into(),
-                transmission: Box::new(move |_| Err("Even the reschedule hereafter fails".into())),
-                schedule_state_transition: ScheduleStateTransition::Reschedule(
-                    Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
-                    false,
-                ),
-                success: false,
-            },
+        let transmissions = vec![
+            new_transmission_delayed(),
+            new_transmission_infinite(),
+            new_transmission_interval_last(),
+            new_transmission_interval_n(),
+            new_transmission_cron(),
         ];
 
-        for test_case in test_cases {
-            let mut transmitter = MockTransmitter::new();
-            let mut repository = MockRepository::new();
-            let mut metrics = MockMetrics::new();
+        for transmission in transmissions.iter() {
+            let test_cases = vec![
+                TransmissionTestCase {
+                    name: "success".into(),
+                    transmission_response: Box::new(move |_| Ok(())),
+                    schedule_state_transition: ScheduleStateTransition::Save(
+                        Box::new(move |_| Ok(())),
+                        true,
+                    ),
+                    success: true,
+                },
+                TransmissionTestCase {
+                    name: "fail_and_reschedule".into(),
+                    transmission_response: Box::new(move |_| {
+                        Err("Let's hope this gets rescheduled.".into())
+                    }),
+                    schedule_state_transition: ScheduleStateTransition::Reschedule(
+                        Box::new(move |_| Ok(())),
+                        true,
+                    ),
+                    success: false,
+                },
+                TransmissionTestCase {
+                    name: "transmit_but_fail_mark_done".into(),
+                    transmission_response: Box::new(move |_| Ok(())),
+                    schedule_state_transition: ScheduleStateTransition::Save(
+                        Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
+                        false,
+                    ),
+                    success: false,
+                },
+                TransmissionTestCase {
+                    name: "transmit_fail_and_reschedule_fail".into(),
+                    transmission_response: Box::new(move |_| {
+                        Err("Even the reschedule hereafter fails".into())
+                    }),
+                    schedule_state_transition: ScheduleStateTransition::Reschedule(
+                        Box::new(move |_| Err("The schedule is stuck in doing now.".into())),
+                        false,
+                    ),
+                    success: false,
+                },
+            ];
 
-            transmitter
-                .expect_transmit()
-                .returning(test_case.transmission)
-                .times(1);
+            for test_case in test_cases {
+                let mut transmitter = MockTransmitter::new();
+                let mut repository = MockRepository::new();
+                let mut metrics = MockMetrics::new();
 
-            match test_case.schedule_state_transition {
-                ScheduleStateTransition::Save(callback, transition_succeeds) => {
-                    repository.expect_save().returning(callback).times(1);
-                    metrics
-                        .expect_count()
-                        .with(eq(MetricEvent::ScheduleStateSaved(transition_succeeds)))
-                        .returning(|_| ())
-                        .times(1);
-                }
-                ScheduleStateTransition::Reschedule(callback, transition_succeeds) => {
-                    repository.expect_reschedule().returning(callback).times(1);
-                    metrics
-                        .expect_count()
-                        .with(eq(MetricEvent::Rescheduled(transition_succeeds)))
-                        .returning(|_| ())
-                        .times(1);
-                }
-            };
+                transmitter
+                    .expect_transmit()
+                    .returning(test_case.transmission_response)
+                    .times(1);
 
-            let scheduler = TransmissionScheduler::new(
-                Arc::new(repository),
-                Arc::new(transmitter),
-                Arc::new(Utc::now),
-                Arc::new(metrics),
-            );
+                match test_case.schedule_state_transition {
+                    ScheduleStateTransition::Save(callback, transition_succeeds) => {
+                        repository.expect_save().returning(callback).times(1);
+                        metrics
+                            .expect_count()
+                            .with(eq(MetricEvent::ScheduleStateSaved(transition_succeeds)))
+                            .returning(|_| ())
+                            .times(1);
+                    }
+                    ScheduleStateTransition::Reschedule(callback, transition_succeeds) => {
+                        repository.expect_reschedule().returning(callback).times(1);
+                        metrics
+                            .expect_count()
+                            .with(eq(MetricEvent::Rescheduled(transition_succeeds)))
+                            .returning(|_| ())
+                            .times(1);
+                    }
+                };
 
-            let result = scheduler.transmit(&new_transmission_delayed()).await;
-            assert_eq!(
-                result.is_ok(),
-                test_case.success,
-                "Test case failed: {}",
-                test_case.name
-            );
+                let scheduler = TransmissionScheduler::new(
+                    Arc::new(repository),
+                    Arc::new(transmitter),
+                    Arc::new(Utc::now),
+                    Arc::new(metrics),
+                );
+
+                let result = scheduler.transmit(&transmission).await;
+                assert_eq!(
+                    result.is_ok(),
+                    test_case.success,
+                    "Test case failed: {}",
+                    test_case.name
+                );
+            }
         }
     }
 
@@ -1278,11 +1302,7 @@ mod tests {
             },
             TestCase {
                 name: String::from("valid interval"),
-                schedule: Schedule::Interval(Interval::new(
-                    now,
-                    time::Duration::from_millis(100),
-                    Iterate::Infinitely,
-                )),
+                schedule: new_interval_infinite(now),
                 expected_result: Ok(()),
             },
             TestCase {
