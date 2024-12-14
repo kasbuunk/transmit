@@ -1,7 +1,7 @@
 use log::info;
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub port: u16,
     pub host: String,

@@ -19,7 +19,7 @@ use tokio::net::TcpListener;
 const METRIC_NAME: &str = "procedure";
 const METRIC_HELP_TEXT: &str = "Number of procedure calls";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub port: u16,
     pub endpoint: String,

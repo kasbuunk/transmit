@@ -1,7 +1,9 @@
+use humantime;
 use std::env;
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
+use std::str::FromStr;
 
 use serde::Deserialize;
 
@@ -14,6 +16,7 @@ const ENV_POSTGRES_PASSWORD: &'static str = "POSTGRES_PASSWORD";
 struct FileConfig {
     automigrate: bool,
     log_level: String,
+    clock_cycle_interval: String,
     metrics: config::Metrics,
     repository: Repository,
     reset_state: bool,
@@ -60,13 +63,23 @@ pub fn load_config(file_path: &str) -> Result<config::Config, Box<dyn Error>> {
 
     let secrets = load_secrets_from_env()?;
 
-    Ok(derive_config(config, secrets))
+    derive_config(config, secrets)
 }
 
-fn derive_config(config: FileConfig, secrets: EnvConfig) -> config::Config {
-    config::Config {
+fn derive_config(config: FileConfig, secrets: EnvConfig) -> Result<config::Config, Box<dyn Error>> {
+    let log_level = match log::Level::from_str(&config.log_level) {
+        Ok(log_level) => log_level,
+        Err(err) => {
+            return Err(format!("invalid log level '{}': {err}", &config.log_level).into());
+        }
+    };
+
+    let clock_cycle_interval = humantime::parse_duration(&config.clock_cycle_interval)?;
+
+    Ok(config::Config {
         automigrate: config.automigrate,
-        log_level: config.log_level,
+        log_level,
+        clock_cycle_interval,
         metrics: config.metrics,
         repository: match config.repository {
             Repository::Postgres(postgres_config) => {
@@ -84,12 +97,13 @@ fn derive_config(config: FileConfig, secrets: EnvConfig) -> config::Config {
         transmitter: config.transmitter,
         transport: config.transport,
         reset_state: config.reset_state,
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time;
 
     #[test]
     fn test_load_config() {
@@ -104,7 +118,12 @@ mod tests {
         let configuration = load_config(config_file).expect("could not load configuration");
 
         // Merely asserting the log level is enough to assert the structure of the file contents.
-        assert_eq!(configuration.log_level, "debug".to_string());
+        assert_eq!(configuration.log_level, log::Level::Debug);
+
+        assert_eq!(
+            configuration.clock_cycle_interval,
+            time::Duration::from_millis(100)
+        );
 
         match configuration.repository {
             config::Repository::Postgres(postgres_config) => {

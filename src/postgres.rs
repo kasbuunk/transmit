@@ -2,7 +2,7 @@ use log::info;
 use serde::Deserialize;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub name: String,
     pub host: String,

@@ -1,12 +1,12 @@
 use std::error::Error;
 use std::sync::Arc;
+use std::time;
 
 use async_trait::async_trait;
 use chrono::prelude::*;
 use log::{error, info, trace, warn};
 #[cfg(test)]
 use mockall::predicate::*;
-use std::time;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -15,11 +15,12 @@ use crate::model::{Message, MetricEvent, Schedule, ScheduleError, Transmission};
 
 static BATCH_SIZE: u32 = 100;
 static MAX_DELAYED_AGE: chrono::Duration = chrono::Duration::seconds(1);
-static MIN_INTERVAL: time::Duration = time::Duration::from_millis(10);
 static MAX_NATS_SUBJECT_LENGTH: u32 = 256;
 
 #[derive(Clone)]
 pub struct TransmissionScheduler {
+    // clock_cycle_interval is the duration between each transmission batch.
+    clock_cycle_interval: time::Duration,
     // repository keeps the program stateless, by providing a storage interface to store and
     // retrieve transmissions.
     repository: Arc<dyn Repository>,
@@ -34,7 +35,7 @@ pub struct TransmissionScheduler {
 #[async_trait]
 impl Scheduler for TransmissionScheduler {
     async fn schedule(&self, when: Schedule, what: Message) -> Result<Uuid, ScheduleError> {
-        validate_schedule(self.now.now(), &when)?;
+        validate_schedule(self.now.now(), &when, self.clock_cycle_interval)?;
         validate_message(&what)?;
 
         let transmission = Transmission::new(when, what);
@@ -51,7 +52,11 @@ impl Scheduler for TransmissionScheduler {
     }
 }
 
-fn validate_schedule(now: DateTime<Utc>, schedule: &Schedule) -> Result<(), ScheduleError> {
+fn validate_schedule(
+    now: DateTime<Utc>,
+    schedule: &Schedule,
+    clock_cycle_interval: time::Duration,
+) -> Result<(), ScheduleError> {
     match schedule {
         Schedule::Delayed(delayed) => {
             if delayed.transmit_at - now < -MAX_DELAYED_AGE {
@@ -64,7 +69,7 @@ fn validate_schedule(now: DateTime<Utc>, schedule: &Schedule) -> Result<(), Sche
             if interval.first_transmission - now < -MAX_DELAYED_AGE {
                 return Err(ScheduleError::AgedSchedule);
             }
-            if interval.interval < MIN_INTERVAL {
+            if interval.interval < clock_cycle_interval {
                 return Err(ScheduleError::TooShortInterval);
             }
 
@@ -113,12 +118,14 @@ fn validate_message(message: &Message) -> Result<(), ScheduleError> {
 
 impl TransmissionScheduler {
     pub fn new(
+        clock_cycle_interval: time::Duration,
         repository: Arc<dyn Repository>,
         transmitter: Arc<dyn Transmitter>,
         now: Arc<dyn Now>,
         metrics: Arc<dyn Metrics>,
     ) -> TransmissionScheduler {
         TransmissionScheduler {
+            clock_cycle_interval,
             repository,
             transmitter,
             now,
@@ -142,7 +149,7 @@ impl TransmissionScheduler {
                     break;
                 }
 
-                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+                _ = tokio::time::sleep(self.clock_cycle_interval) => {}
             }
         }
 
@@ -257,6 +264,8 @@ mod tests {
     use crate::contract::*;
     use crate::model::*;
 
+    const DEFAULT_CLOCK_CYCLE_INTERVAL: time::Duration = time::Duration::from_micros(10);
+
     #[tokio::test]
     async fn test_poll_non_ready_schedule() {
         let timestamp_now =
@@ -317,6 +326,7 @@ mod tests {
                 .times(1);
 
             let scheduler = TransmissionScheduler::new(
+                DEFAULT_CLOCK_CYCLE_INTERVAL,
                 Arc::new(repository),
                 Arc::new(transmitter),
                 Arc::new(now),
@@ -388,6 +398,7 @@ mod tests {
             .times(1);
 
         let scheduler = TransmissionScheduler::new(
+            DEFAULT_CLOCK_CYCLE_INTERVAL,
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(now), // First call to now will be too early for the given time, the next will
@@ -477,6 +488,7 @@ mod tests {
             .times(3);
 
         let scheduler = TransmissionScheduler::new(
+            DEFAULT_CLOCK_CYCLE_INTERVAL,
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(Utc::now),
@@ -561,6 +573,7 @@ mod tests {
             .times(3);
 
         let scheduler = TransmissionScheduler::new(
+            DEFAULT_CLOCK_CYCLE_INTERVAL,
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(Utc::now),
@@ -594,6 +607,7 @@ mod tests {
             .times(1);
 
         let scheduler = TransmissionScheduler::new(
+            DEFAULT_CLOCK_CYCLE_INTERVAL,
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(Utc::now),
@@ -624,6 +638,7 @@ mod tests {
             .times(1);
 
         let scheduler = TransmissionScheduler::new(
+            DEFAULT_CLOCK_CYCLE_INTERVAL,
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(Utc::now),
@@ -837,6 +852,7 @@ mod tests {
                 };
 
                 let scheduler = TransmissionScheduler::new(
+                    DEFAULT_CLOCK_CYCLE_INTERVAL,
                     Arc::new(repository),
                     Arc::new(transmitter),
                     Arc::new(Utc::now),
@@ -906,6 +922,7 @@ mod tests {
             .times(amount_transmissions);
 
         let scheduler = TransmissionScheduler::new(
+            DEFAULT_CLOCK_CYCLE_INTERVAL,
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(Utc::now),
@@ -960,6 +977,7 @@ mod tests {
             .times(1);
 
         let scheduler = TransmissionScheduler::new(
+            DEFAULT_CLOCK_CYCLE_INTERVAL,
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(Utc::now),
@@ -1072,6 +1090,7 @@ mod tests {
             .times(1);
 
         let scheduler = TransmissionScheduler::new(
+            DEFAULT_CLOCK_CYCLE_INTERVAL,
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(Utc::now),
@@ -1181,6 +1200,7 @@ mod tests {
             .times(1);
 
         let scheduler = TransmissionScheduler::new(
+            DEFAULT_CLOCK_CYCLE_INTERVAL,
             Arc::new(repository),
             Arc::new(transmitter),
             Arc::new(now),
@@ -1336,7 +1356,7 @@ mod tests {
         ];
 
         for test_case in test_cases {
-            let valid = validate_schedule(now, &test_case.schedule);
+            let valid = validate_schedule(now, &test_case.schedule, DEFAULT_CLOCK_CYCLE_INTERVAL);
             match test_case.expected_result {
                 Ok(()) => assert!(
                     valid.is_ok(),
