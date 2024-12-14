@@ -3,7 +3,7 @@ use std::process;
 use std::sync::Arc;
 
 use chrono::prelude::*;
-use log::info;
+use log::{error, info};
 use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::sync::CancellationToken;
 
@@ -29,13 +29,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         2 => &args[1],
         _ => {
             println!("Please specify the path to the configuration file as the only argument.");
-
             process::exit(1);
         }
     };
 
     // Load configuration.
-    let config = load_config::load_config(config_file_path)?;
+    let config = match load_config::load_config(config_file_path) {
+        Ok(config) => config,
+        Err(err) => {
+            error!("Failed to load config: {}", err);
+            process::exit(1);
+        }
+    };
 
     // Initialise logger.
     let rust_log = "RUST_LOG";
@@ -46,7 +51,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Construct transmitter.
     let transmitter: Arc<dyn contract::Transmitter> = match config.transmitter {
         config::Transmitter::Nats(nats_config) => {
-            let nats_client = nats::connect_to_nats(nats_config).await?;
+            let nats_client = match nats::connect_to_nats(nats_config).await {
+                Ok(client) => client,
+                Err(err) => {
+                    error!("Failed to initialise nats connection: {}", err);
+                    process::exit(1);
+                }
+            };
+
             let transmitter = transmitter_nats::NatsPublisher::new(nats_client);
             info!("Initialised nats transmitter.");
 
@@ -57,7 +69,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Construct repository.
     let repository: Arc<dyn contract::Repository> = match config.repository {
         config::Repository::Postgres(postgres_config) => {
-            let postgres_connection = postgres::connect_to_database(postgres_config).await?;
+            let postgres_connection = match postgres::connect_to_database(postgres_config).await {
+                Ok(client) => client,
+                Err(err) => {
+                    error!("Failed to initialise postgres connection: {}", err);
+                    process::exit(1);
+                }
+            };
+
             let repository = repository_postgres::RepositoryPostgres::new(postgres_connection);
 
             info!("Initialised postgres repository.");
@@ -65,11 +84,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if config.automigrate {
                 info!("Running migrations.");
 
-                repository.migrate().await?;
+                match repository.migrate().await {
+                    Ok(_) => (),
+                    Err(err) => {
+                        error!("Failed to run sql migrations: {}", err);
+                        process::exit(1);
+                    }
+                };
             }
 
             if config.reset_state {
-                repository.clear_all().await?;
+                match repository.clear_all().await {
+                    Ok(_) => (),
+                    Err(err) => {
+                        error!("Failed to reset repository state: {}", err);
+                        process::exit(1);
+                    }
+                };
             }
 
             Arc::new(repository)
@@ -89,10 +120,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Start metrics server.
             let _handle = tokio::spawn(async move {
-                metrics_server
-                    .start_server()
-                    .await
-                    .expect("prometheus server must start");
+                match metrics_server.start_server().await {
+                    Ok(_) => (),
+                    Err(err) => {
+                        error!("Failed to start prometheus server: {}", err);
+                        process::exit(1);
+                    }
+                }
             });
 
             Arc::new(metrics_client)
@@ -136,8 +170,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Listen for cancellation signal.
-    let mut sigint = signal(SignalKind::interrupt())?;
-    let mut sigterm = signal(SignalKind::terminate())?;
+    let mut sigint = match signal(SignalKind::interrupt()) {
+        Ok(sig) => sig,
+        Err(err) => {
+            error!("Failed to construct sigint listener: {}", err);
+            process::exit(1);
+        }
+    };
+    let mut sigterm = match signal(SignalKind::terminate()) {
+        Ok(sig) => sig,
+        Err(err) => {
+            error!("Failed to construct sigint listener: {}", err);
+            process::exit(1);
+        }
+    };
     tokio::select! {
         _ = sigint.recv() => {
             info!("Received SIGINT. Sending cancellation signal.");
@@ -151,7 +197,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    grpc_handle.await?;
+    match grpc_handle.await {
+        Ok(_) => (),
+        Err(err) => {
+            error!("Failed to await grpc shutdown: {}", err);
+            process::exit(1);
+        }
+    };
 
     info!("All application components have shut down.");
 
