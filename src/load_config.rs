@@ -63,7 +63,11 @@ pub fn load_config(file_path: &str) -> Result<config::Config, Box<dyn Error>> {
 
     let secrets = load_secrets_from_env()?;
 
-    derive_config(config, secrets)
+    let config = derive_config(config, secrets)?;
+
+    config::validate(&config)?;
+
+    Ok(config)
 }
 
 fn derive_config(config: FileConfig, secrets: EnvConfig) -> Result<config::Config, Box<dyn Error>> {
