@@ -451,6 +451,7 @@ mod tests {
         nats_connection: &async_nats::Client,
     ) -> Arc<TransmissionScheduler> {
         let scheduler = scheduler::TransmissionScheduler::new(
+            time::Duration::from_micros(10),
             Arc::new(postgres_repository().await),
             Arc::new(nats_publisher(&nats_connection)),
             Arc::new(now),

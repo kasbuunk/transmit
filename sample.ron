@@ -2,6 +2,7 @@
 	automigrate: true,
 	reset_state: false,
 	log_level: "debug",
+	clock_cycle_interval: "100ms",
 	metrics: Prometheus(
 		Config(
 			port: 9090,

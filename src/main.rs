@@ -23,12 +23,14 @@ const DEFAULT_CONFIG_FILE_PATH: &'static str = "config.ron";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
+
     let args: Vec<String> = std::env::args().collect();
     let config_file_path = match args.len() {
         1 => DEFAULT_CONFIG_FILE_PATH,
         2 => &args[1],
         _ => {
-            println!("Please specify the path to the configuration file as the only argument.");
+            error!("Please specify the path to the configuration file as the only argument.");
             process::exit(1);
         }
     };
@@ -44,8 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialise logger.
     let rust_log = "RUST_LOG";
-    env::set_var(rust_log, config.log_level);
-    env_logger::init();
+    env::set_var(rust_log, config.log_level.as_str());
     info!("Starting application.");
 
     // Construct transmitter.
@@ -138,6 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Construct scheduler.
     let scheduler = Arc::new(scheduler::TransmissionScheduler::new(
+        config.clock_cycle_interval,
         repository,
         transmitter,
         now_provider,
