@@ -14,7 +14,7 @@ use crate::contract::{Metrics, Now, Repository, Scheduler, Transmitter};
 use crate::model::{Message, MetricEvent, Schedule, ScheduleError, Transmission};
 
 static BATCH_SIZE: u32 = 100;
-static MAX_DELAYED_AGE: chrono::Duration = chrono::Duration::seconds(1);
+static MAX_DELAYED_AGE: time::Duration = time::Duration::from_secs(1);
 static MAX_NATS_SUBJECT_LENGTH: u32 = 256;
 
 #[derive(Clone)]
@@ -59,14 +59,14 @@ fn validate_schedule(
 ) -> Result<(), ScheduleError> {
     match schedule {
         Schedule::Delayed(delayed) => {
-            if delayed.transmit_at - now < -MAX_DELAYED_AGE {
+            if delayed.transmit_at < now - MAX_DELAYED_AGE {
                 return Err(ScheduleError::AgedSchedule);
             }
 
             Ok(())
         }
         Schedule::Interval(interval) => {
-            if interval.first_transmission - now < -MAX_DELAYED_AGE {
+            if interval.first_transmission < now - MAX_DELAYED_AGE {
                 return Err(ScheduleError::AgedSchedule);
             }
             if interval.interval < clock_cycle_interval {
@@ -76,7 +76,7 @@ fn validate_schedule(
             Ok(())
         }
         Schedule::Cron(cron_schedule) => {
-            if cron_schedule.first_transmission_after - now < -MAX_DELAYED_AGE {
+            if cron_schedule.first_transmission_after < now - MAX_DELAYED_AGE {
                 return Err(ScheduleError::AgedSchedule);
             }
 
@@ -1301,7 +1301,8 @@ mod tests {
     #[test]
     fn test_validate_schedule() {
         let now = DateTime::from_timestamp(1431648000, 0).expect("should be valid timestamp");
-        let long_ago = now - chrono::Duration::hours(1);
+        let long_ago = now - time::Duration::from_secs(2);
+        let in_future = now + chrono::Duration::hours(1);
 
         struct TestCase {
             name: String,
@@ -1313,6 +1314,11 @@ mod tests {
             TestCase {
                 name: String::from("valid delayed"),
                 schedule: new_delayed(now),
+                expected_result: Ok(()),
+            },
+            TestCase {
+                name: String::from("valid delayed in future"),
+                schedule: new_delayed(in_future),
                 expected_result: Ok(()),
             },
             TestCase {
